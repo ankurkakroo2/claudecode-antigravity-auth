@@ -65,8 +65,6 @@ See the [gclaude CLI](#gclaude-cli) section for full commands and config paths.
 
 This server acts as a bridge, enabling you to use **Claude Code** with Google's powerful **Gemini models**. It translates API requests and responses between the Anthropic format (used by Claude Code) and the Gemini format (via LiteLLM), allowing seamless integration.
 
-![Claude Code with Gemini Proxy](image.png)
-
 ## Features
 
 - **Antigravity OAuth (Google AI Pro)**: Use Claude Sonnet/Opus via Google OAuth (no API key required).
