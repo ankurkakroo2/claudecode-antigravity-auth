@@ -31,8 +31,8 @@ Treat this as a “proxy mismatch” problem, not an entitlement problem.
 ## Current Local Setup (as observed on the machine)
 
 ### Repo
-- Path: `gemini-for-claude-code/`
-- Proxy entrypoint used by LaunchAgent and tests: `gemini-for-claude-code/server.py` (legacy single-file server).
+- Path: repo root
+- Proxy entrypoint used by LaunchAgent and tests: `server.py` (legacy single-file server).
 
 ### Shell command used for Claude Code
 - `anticlaude()` function in `~/.zshrc` runs:
@@ -122,8 +122,8 @@ Problem:
 - `gclaude/detector.py` previously tested access using a hardcoded fallback project id (`rising-fact-p41fc`), which can give misleading “license” errors or make paid models appear unavailable.
 
 Fix:
-- Updated `gemini-for-claude-code/gclaude/detector.py` to accept `project_id`.
-- Updated `gemini-for-claude-code/gclaude/cli.py` so `gclaude init` and `gclaude set-model --detect` pass the discovered `project_id` from the user’s stored OAuth account.
+- Updated `gclaude/detector.py` to accept `project_id`.
+- Updated `gclaude/cli.py` so `gclaude init` and `gclaude set-model --detect` pass the discovered `project_id` from the user’s stored OAuth account.
 
 ### 2) LaunchAgent made OAuth-only
 - Updated `~/Library/LaunchAgents/com.claude.gemini-proxy.plist` to remove `GEMINI_API_KEY` and set `USE_ANTIGRAVITY=true` plus explicit Antigravity model env vars.
@@ -134,12 +134,12 @@ Fix:
 
 ## Key Files
 
-- Proxy server: `gemini-for-claude-code/server.py`
-- Antigravity client: `gemini-for-claude-code/antigravity_client.py`
-- Quota routing: `gemini-for-claude-code/quota_manager.py`
-- OAuth: `gemini-for-claude-code/antigravity_auth.py`
-- CLI: `gemini-for-claude-code/gclaude/cli.py`
-- Model detection: `gemini-for-claude-code/gclaude/detector.py`
+- Proxy server: `server.py`
+- Antigravity client: `antigravity_client.py`
+- Quota routing: `quota_manager.py`
+- OAuth: `antigravity_auth.py`
+- CLI: `gclaude/cli.py`
+- Model detection: `gclaude/detector.py`
 - Claude settings: `~/.claude/antigravity-settings.json`
 - Zsh function: `~/.zshrc` (`anticlaude()`)
 

@@ -54,7 +54,7 @@ rm ~/.config/gclaude/antigravity-accounts.json
 
 ### Step 2: Re-authenticate
 ```bash
-cd /Users/ankur/D/Playground/gemini-claude-proxy/gemini-for-claude-code
+cd /Users/ankur/D/Playground/gemini-claude-proxy
 source .venv/bin/activate
 python -m gclaude auth
 ```

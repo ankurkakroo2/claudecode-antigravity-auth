@@ -41,8 +41,7 @@ Thumbs.db
 
 # OAuth tokens and sensitive configs
 *.json
-!gemini-for-claude-code/gclaude/models.json
-!gemini-for-claude-code/pyproject.toml
+!gclaude/models.json
 .config/gclaude/antigravity-accounts.json
 .claude/antigravity-settings.json
 

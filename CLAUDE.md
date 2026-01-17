@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **gemini-claude-proxy**, a proxy server that translates between Anthropic's Messages API format (used by Claude Code) and Google's Gemini API. It enables using Claude Code CLI with Google Gemini models as the backend.
+This is **gemini-claude-proxy**, a proxy server that translates between Anthropic's Messages API format (used by Claude Code) and Google's Gemini API. It enables using Claude Code CLI with Google Gemini or Antigravity (OAuth) models as the backend.
 
 **Key capability:** The proxy includes Antigravity OAuth integration, which provides access to higher-quota Google AI subscription models.
 
@@ -14,19 +14,10 @@ This is **gemini-claude-proxy**, a proxy server that translates between Anthropi
 
 ## Repository Structure
 
-The repository contains two main parts:
+The repository is a single top-level package:
 
-1. **`gemini-for-claude-code/`** - Main proxy server implementation
-   - `server.py` - Standalone FastAPI server (legacy, can be run directly)
-   - `gclaude/` - Python package with CLI tool (recommended approach)
-
-2. **Root directory** - Parent directory for development
-
-**Important:** All development work happens in `gemini-for-claude-code/`. When running commands, navigate there first:
-
-```bash
-cd gemini-for-claude-code
-```
+- `server.py` - Standalone FastAPI server (legacy, can be run directly)
+- `gclaude/` - Python package with CLI tool (recommended approach)
 
 ---
 
@@ -35,8 +26,6 @@ cd gemini-for-claude-code
 ### Environment Setup
 
 ```bash
-cd gemini-for-claude-code
-
 # Create virtual environment
 python3 -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
@@ -99,7 +88,6 @@ ruff check gclaude/
 
 ```bash
 # Run tests (if test suite exists)
-cd gemini-for-claude-code
 pytest
 
 # Run with coverage
@@ -123,9 +111,9 @@ Claude Code CLI
        │
        ├─► Model Pattern Matching (*haiku*, *sonnet*, *opus*)
        │
-       ├─► Authentication Check
-       │    ├─► OAuth token valid? → Antigravity API
-       │    └─► No OAuth? → Gemini API key fallback
+       ├─► Mode Selection
+       │    ├─► USE_ANTIGRAVITY=true → Antigravity API (OAuth)
+       │    └─► USE_ANTIGRAVITY=false → Gemini API (API key)
        │
        ▼
 ┌──────────────────────┐
@@ -134,7 +122,7 @@ Claude Code CLI
 └──────────────────────┘
        │
        ▼
-Gemini/Antigravity API
+Gemini or Antigravity API
 ```
 
 ### Key Components
