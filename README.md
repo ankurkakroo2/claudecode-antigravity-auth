@@ -1,4 +1,4 @@
-# Gemini for Claude Code: An Anthropic-Compatible Proxy
+# <In Progress>Gemini for Claude Code: An Anthropic-Compatible Proxy
 
 ---
 
