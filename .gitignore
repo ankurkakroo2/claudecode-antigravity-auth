@@ -1,0 +1,64 @@
+# Environment variables (API keys, secrets)
+.env
+.env.local
+.env.*.local
+
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Testing / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Tool cache
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# OAuth tokens and sensitive configs
+*.json
+!gemini-for-claude-code/gclaude/models.json
+!gemini-for-claude-code/pyproject.toml
+.config/gclaude/antigravity-accounts.json
+.claude/antigravity-settings.json
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# SpecStory
+.specstory/
