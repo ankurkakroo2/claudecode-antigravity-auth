@@ -1,5 +1,3 @@
-# FOR OFFICIAL GOOGLE AI CLI TOOL SEE https://github.com/google-gemini/gemini-cli
-
 # Gemini for Claude Code: An Anthropic-Compatible Proxy
 
 ---
