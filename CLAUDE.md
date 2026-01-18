@@ -16,8 +16,8 @@ This is **gemini-claude-proxy**, a proxy server that translates between Anthropi
 
 The repository is a single top-level package:
 
-- `server.py` - Standalone FastAPI server (legacy, can be run directly)
 - `gclaude/` - Python package with CLI tool (recommended approach)
+- `gclaude/proxy/server.py` - FastAPI app (can be run directly)
 
 ---
 
@@ -60,23 +60,23 @@ python -m gclaude logs -f
 python -m gclaude stop
 ```
 
-**Alternative: Direct server.py execution**
+**Alternative: Direct proxy module execution**
 ```bash
 # Run the standalone server
-python server.py
+python -m gclaude.proxy.server
 
 # Development with auto-reload
-uvicorn server:app --host 0.0.0.0 --port 8082 --reload
+uvicorn gclaude.proxy.server:app --host 0.0.0.0 --port 8082 --reload
 ```
 
 ### Code Quality
 
 ```bash
 # Format code with Black
-black gclaude/ server.py *.py
+black gclaude/ gclaude/proxy/ *.py
 
 # Lint with Ruff
-ruff check gclaude/ server.py *.py
+ruff check gclaude/ gclaude/proxy/ *.py
 
 # Run both (if dev dependencies installed)
 pip install -e ".[dev]"
@@ -137,16 +137,16 @@ Gemini or Antigravity API
 | `gclaude/detector.py` | Model access detection for Antigravity |
 | `gclaude/auth.py` | OAuth UI flow |
 | `gclaude/utils.py` | Utility functions (paths, process management) |
-| `antigravity_auth.py` | OAuth 2.0 with PKCE implementation |
-| `antigravity_client.py` | Antigravity API client |
-| `quota_manager.py` | Quota management between Antigravity and Gemini |
+| `gclaude/proxy/antigravity_auth.py` | OAuth 2.0 with PKCE implementation |
+| `gclaude/proxy/antigravity_client.py` | Antigravity API client |
+| `gclaude/proxy/quota_manager.py` | Quota management between Antigravity and Gemini |
+| `gclaude/proxy/server.py` | FastAPI app (Claude ↔ Antigravity/Gemini) |
 
-**server.py (Legacy Standalone):**
+**gclaude/proxy/server.py:**
 
-- Single-file FastAPI application
-- Can be run directly without gclaude package installation
-- Contains all translation logic inline
-- Uses environment variables for configuration (.env file)
+- FastAPI application used by the CLI wrapper
+- Can be run directly or via `python -m gclaude.proxy.server`
+- Contains request/response translation logic
 
 ### Request Flow
 
@@ -309,7 +309,7 @@ anticlaude
 
 To add a new Gemini model:
 
-1. Add to `ModelManager.base_gemini_models` in `server.py`
+1. Add to `ModelManager.base_gemini_models` in `gclaude/proxy/server.py`
 2. Or set via `BIG_MODEL`/`SMALL_MODEL` environment variables
 3. For Antigravity models, add to `get_available_antigravity_models()` in `gclaude/utils.py`
 
@@ -417,6 +417,6 @@ curl http://localhost:8082/test-connection
 - **Never commit OAuth token files** - `~/.config/gclaude/antigravity-accounts.json`
 - **Test proxy health** before using with Claude Code: `curl http://localhost:8082/health`
 - **Check logs** when troubleshooting: `python -m gclaude logs`
-- **Use gclaude CLI** for easier management vs direct `server.py` execution
+- **Use gclaude CLI** for easier management vs direct `gclaude/proxy/server.py` execution
 - **Model detection** helps identify which Antigravity models you can access
 - **Fallback works automatically** - if OAuth fails, proxy uses Gemini API key

@@ -6,6 +6,7 @@ Provides a guided OAuth flow for Antigravity authentication.
 
 import asyncio
 from pathlib import Path
+from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -13,12 +14,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from gclaude.utils import get_config_dir
 
-# Try to import from parent directory (for development)
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 try:
-    from antigravity_auth import (
+    from gclaude.proxy.antigravity_auth import (
         perform_oauth_flow,
         exchange_code_for_tokens,
         AntigravityAuthManager,
@@ -26,7 +23,6 @@ try:
         ACCOUNTS_PATH,
     )
 except ImportError:
-    # Fallback for when running as installed package
     ACCOUNTS_PATH = Path.home() / ".config" / "gclaude" / "antigravity-accounts.json"
 
 
@@ -41,7 +37,7 @@ async def authenticate_with_rich_output(console: Console, client_id: Optional[st
     Returns:
         Token dict or None if failed
     """
-    from antigravity_auth import perform_oauth_flow, exchange_code_for_tokens
+    from gclaude.proxy.antigravity_auth import perform_oauth_flow, exchange_code_for_tokens
     import aiohttp
 
     console.print()
@@ -123,7 +119,7 @@ async def init_auth_with_rich_output(console: Console, auth_manager,
     Returns:
         Account info dict or None if failed
     """
-    from antigravity_auth import AntigravityAccount
+    from gclaude.proxy.antigravity_auth import AntigravityAccount
 
     token_data = await authenticate_with_rich_output(console, client_id=client_id)
     if not token_data:
@@ -150,7 +146,7 @@ async def init_auth_with_rich_output(console: Console, auth_manager,
 
 def list_accounts(console: Console) -> None:
     """List stored Antigravity accounts."""
-    from antigravity_auth import AntigravityAuthManager
+    from gclaude.proxy.antigravity_auth import AntigravityAuthManager
 
     auth_manager = AntigravityAuthManager()
     accounts = auth_manager.get_all_accounts()
@@ -182,7 +178,7 @@ async def refresh_tokens(console: Console, auth_manager) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    from antigravity_auth import get_valid_access_token, AntigravityAccount
+    from gclaude.proxy.antigravity_auth import get_valid_access_token, AntigravityAccount
 
     console.print("[dim]Refreshing access tokens...[/dim]")
 
@@ -191,7 +187,7 @@ async def refresh_tokens(console: Console, auth_manager) -> bool:
 
     for account in accounts:
         if account.is_expired:
-            from antigravity_auth import refresh_access_token
+            from gclaude.proxy.antigravity_auth import refresh_access_token
             try:
                 new_tokens = await refresh_access_token(account.refresh_token)
                 account.access_token = new_tokens.get("access_token", account.access_token)

@@ -161,7 +161,7 @@ If you are using the OAuth Quick Start above, you can skip this section.
     FORCE_DISABLE_STREAMING="false"     # Disable streaming globally
     EMERGENCY_DISABLE_STREAMING="false" # Emergency streaming disable
 
-    # Optional: OAuth / Antigravity (only if running server.py directly)
+    # Optional: OAuth / Antigravity (only if running the proxy module directly)
     USE_ANTIGRAVITY="true"
     ANTIGRAVITY_HAIKU_MODEL="antigravity-gemini-3-flash"
     ANTIGRAVITY_SONNET_MODEL="antigravity-claude-sonnet-4-5-thinking"
@@ -169,17 +169,17 @@ If you are using the OAuth Quick Start above, you can skip this section.
     ```
 
 5.  **Run the server**:
-    The `server.py` script includes a `main()` function that starts the Uvicorn server:
+    The proxy module includes a `main()` entry that starts the Uvicorn server:
     ```bash
-    python server.py
+    python -m gclaude.proxy.server
     ```
-    For development with auto-reload (restarts when you save changes to `server.py`):
+    For development with auto-reload (restarts when you save changes to the proxy module):
     ```bash
-    uvicorn server:app --host 0.0.0.0 --port 8082 --reload
+    uvicorn gclaude.proxy.server:app --host 0.0.0.0 --port 8082 --reload
     ```
     You can view all startup options, including configurable environment variables, by running:
     ```bash
-    python server.py --help
+    python -m gclaude.proxy.server --help
     ```
 
 ## Usage with Claude Code
@@ -366,7 +366,7 @@ Special thanks to the community for testing and feedback on error handling impro
 
 ## gclaude CLI
 
-`gclaude` is the OAuth/Antigravity-focused CLI. If you only want API key mode, use `.env` + `python server.py` instead.
+`gclaude` is the OAuth/Antigravity-focused CLI. If you only want API key mode, use `.env` + `python -m gclaude.proxy.server` instead.
 
 ### Installation
 

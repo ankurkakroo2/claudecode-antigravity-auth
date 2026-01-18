@@ -17,8 +17,8 @@ import sys
 
 # Antigravity integration
 try:
-    from antigravity_auth import AntigravityAuthManager, authenticate_and_store
-    from antigravity_client import (
+    from gclaude.proxy.antigravity_auth import AntigravityAuthManager, authenticate_and_store
+    from gclaude.proxy.antigravity_client import (
         AntigravityClient,
         AntigravityRateLimitError,
         get_model_for_claude_alias,
@@ -26,7 +26,7 @@ try:
         TOOL_THOUGHT_SIGNATURES,
         TOOL_CALL_CONTEXT,
     )
-    from quota_manager import QuotaManager, QuotaType
+    from gclaude.proxy.quota_manager import QuotaManager, QuotaType
 
     ANTIGRAVITY_AVAILABLE = True
 except ImportError as e:
@@ -232,7 +232,7 @@ quota_manager = None
 if config.use_antigravity and ANTIGRAVITY_AVAILABLE:
     try:
         auth_manager = AntigravityAuthManager()
-        from quota_manager import QuotaManager
+        from gclaude.proxy.quota_manager import QuotaManager
 
         quota_manager = QuotaManager(
             auth_manager=auth_manager,
@@ -1760,8 +1760,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--help":
         print("Enhanced Gemini-to-Claude API Proxy v2.5.0")
         print("")
-        print("Usage: python server.py [--antigravity-login] [--help]")
-        print("       uvicorn server:app --reload --host 0.0.0.0 --port 8082")
+        print("Usage: python -m gclaude.proxy.server [--antigravity-login] [--help]")
+        print("       uvicorn gclaude.proxy.server:app --reload --host 0.0.0.0 --port 8082")
         print("")
         print("Commands:")
         print("  --antigravity-login   Authenticate with Google OAuth for Antigravity")

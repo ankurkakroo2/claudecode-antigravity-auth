@@ -13,12 +13,15 @@ gclaude/
 ├── __init__.py           # Package constants (paths, version)
 ├── cli.py                # CLI commands (init, start, stop, status, logs, auth)
 ├── config.py             # Configuration management
-├── server.py             # ProxyServer class (FastAPI server)
+├── server.py             # ProxyServer class (process wrapper)
 ├── detector.py           # Model access detection
 ├── auth.py               # Rich UI for OAuth authentication
 ├── utils.py              # Utility functions
-├── antigravity_client.py # Antigravity API client
-└── antigravity_auth.py   # OAuth 2.0 with PKCE implementation
+└── proxy/                # Proxy implementation modules
+    ├── server.py         # FastAPI app (Claude ↔ Antigravity/Gemini)
+    ├── antigravity_client.py # Antigravity API client
+    ├── antigravity_auth.py   # OAuth 2.0 with PKCE implementation
+    └── quota_manager.py      # Quota/rate-limit management
 ```
 
 ## Component Overview
@@ -55,7 +58,7 @@ Provides the `gclaude` command with subcommands:
 - `rich` - Terminal UI
 - `questionary` - Interactive prompts
 - `config.py` - Config management
-- `server.py` - ProxyServer
+- `gclaude/server.py` - ProxyServer
 - `detector.py` - Model detection
 - `auth.py` - OAuth UI
 
@@ -83,12 +86,19 @@ Manages the gclaude configuration file.
 }
 ```
 
-### `server.py` - Proxy Server
+### `gclaude/server.py` - ProxyServer Wrapper
+
+Manages the proxy server process (start/stop/status).
+
+**Key classes**:
+- `ProxyServer` - Manages the proxy server lifecycle
+
+### `gclaude/proxy/server.py` - Proxy Server
 
 Implements the FastAPI server that translates between Claude Code and Antigravity/Gemini APIs.
 
 **Key classes**:
-- `ProxyServer` - Manages the proxy server lifecycle
+- None (FastAPI app module with global `app`)
 
 **Endpoints**:
 - `POST /v1/messages` - Main Claude Code API endpoint
@@ -128,10 +138,10 @@ Provides rich terminal UI for OAuth authentication flow.
 - `get_valid_access_token()` - Get fresh access token
 
 **Dependencies**:
-- `antigravity_auth.py` - OAuth implementation
+- `proxy/antigravity_auth.py` - OAuth implementation
 - `rich` - Terminal UI
 
-### `antigravity_auth.py` - OAuth Implementation
+### `proxy/antigravity_auth.py` - OAuth Implementation
 
 Implements OAuth 2.0 with PKCE for Google authentication.
 
@@ -151,7 +161,7 @@ Implements OAuth 2.0 with PKCE for Google authentication.
 - `ANTIGRAVITY_SCOPES` - Required OAuth scopes
 - `ACCOUNTS_PATH` - `~/.config/gclaude/antigravity-accounts.json`
 
-### `antigravity_client.py` - API Client
+### `proxy/antigravity_client.py` - API Client
 
 Client for calling the Antigravity API.
 

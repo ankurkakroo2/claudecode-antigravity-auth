@@ -86,7 +86,7 @@ This will guide you through:
 
     # Step 1: OAuth Authentication
     from gclaude.auth import init_auth_with_rich_output
-    from antigravity_auth import AntigravityAuthManager
+    from gclaude.proxy.antigravity_auth import AntigravityAuthManager
 
     auth_manager = AntigravityAuthManager()
 
@@ -106,7 +106,7 @@ This will guide you through:
             config.auth_enabled = True
             config.account_email = account.email
             # Get fresh access token for model detection
-            from antigravity_auth import get_valid_access_token
+            from gclaude.proxy.antigravity_auth import get_valid_access_token
 
             access_token = asyncio.run(get_valid_access_token(auth_manager))
         else:
@@ -480,7 +480,7 @@ def logs(follow, lines):
 def auth():
     """Authenticate or re-authenticate with Google OAuth."""
     from gclaude.auth import init_auth_with_rich_output, list_accounts
-    from antigravity_auth import AntigravityAuthManager
+    from gclaude.proxy.antigravity_auth import AntigravityAuthManager
     import questionary
 
     auth_manager = AntigravityAuthManager()
@@ -627,7 +627,10 @@ def set_model(only: str, detect: bool):
     access_results = None
     if detect:
         try:
-            from antigravity_auth import AntigravityAuthManager, get_valid_access_token
+            from gclaude.proxy.antigravity_auth import (
+                AntigravityAuthManager,
+                get_valid_access_token,
+            )
             from gclaude.detector import detect_with_rich_output
 
             auth_manager = AntigravityAuthManager()

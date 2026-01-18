@@ -51,8 +51,8 @@ But requests still fall back to Gemini CLI - routing logic issue.
 **Problem**: Proxy health shows Antigravity available but requests use Gemini CLI
 
 **Action items:**
-- [ ] Check `server.py` model routing logic - why is Antigravity not used?
-- [ ] Verify `quota_manager.py` actually calls Antigravity client
+- [ ] Check `gclaude/proxy/server.py` model routing logic - why is Antigravity not used?
+- [ ] Verify `gclaude/proxy/quota_manager.py` actually calls Antigravity client
 - [ ] Add debug logging to see which quota backend is selected
 - [ ] Test with direct Antigravity API call to verify OAuth works
 
@@ -75,7 +75,7 @@ But requests still fall back to Gemini CLI - routing logic issue.
 **Problem**: `EnterPlanMode` tool fails Gemini validation
 
 **Action items:**
-- [ ] Check `server.py` tool translation - ensure all tools have valid OBJECT schemas
+- [ ] Check `gclaude/proxy/server.py` tool translation - ensure all tools have valid OBJECT schemas
 - [ ] Test with simpler request (no tools) first
 - [ ] Add tool schema validation before sending to Gemini
 
@@ -200,7 +200,7 @@ antigravity
 ```
 Claude Code CLI
      ↓ (ANTHROPIC_BASE_URL=http://127.0.0.1:8082)
-gclaude proxy (server.py)
+gclaude proxy (gclaude/proxy/server.py)
      ↓ (routes based on model type)
      ├─→ Antigravity API (OAuth) → Google Gemini 3 models
      └─→ Gemini CLI API (API key) → Standard Gemini models (fallback)

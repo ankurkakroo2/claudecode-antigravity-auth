@@ -14,12 +14,12 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from antigravity_auth import (
+from gclaude.proxy.antigravity_auth import (
     AntigravityAuthManager,
     discover_project_id,
     get_valid_access_token,
 )
-from antigravity_client import (
+from gclaude.proxy.antigravity_client import (
     AntigravityAuthError,
     AntigravityClient,
     AntigravityClientError,

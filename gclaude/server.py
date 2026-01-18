@@ -37,14 +37,13 @@ class ProxyServer:
 
     def get_server_script_path(self) -> Path:
         """Get the path to the server script."""
-        # Check if we're in development mode (server.py in parent dir)
+        # Prefer the packaged proxy server module.
         current_dir = Path(__file__).parent
-        server_path = current_dir.parent / "server.py"
+        server_path = current_dir / "proxy" / "server.py"
 
         if server_path.exists():
             return server_path
 
-        # Otherwise, assume installed and use module
         return Path(__file__)
 
     def start(self) -> tuple[bool, str]:

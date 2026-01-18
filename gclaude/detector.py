@@ -12,7 +12,7 @@ import aiohttp
 from gclaude.utils import get_available_antigravity_models
 
 
-# Keep aligned with antigravity_client.ANTIGRAVITY_ENDPOINTS
+# Keep aligned with gclaude.proxy.antigravity_client.ANTIGRAVITY_ENDPOINTS
 ANTIGRAVITY_ENDPOINTS = [
     "https://daily-cloudcode-pa.sandbox.googleapis.com",
     "https://autopush-cloudcode-pa.sandbox.googleapis.com",
