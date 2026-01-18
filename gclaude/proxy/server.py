@@ -78,16 +78,8 @@ class Constants:
 # Simple Configuration
 class Config:
     def __init__(self):
-        # GEMINI_API_KEY is optional when using Antigravity only
-        self.gemini_api_key = os.environ.get("GEMINI_API_KEY")
-        self.use_antigravity = os.environ.get("USE_ANTIGRAVITY", "false").lower() == "true"
-
-        # Require API key unless Antigravity-only mode
-        if not self.use_antigravity and not self.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY not found in environment variables")
-
-        self.big_model = os.environ.get("BIG_MODEL", "gemini-1.5-pro-latest")
-        self.small_model = os.environ.get("SMALL_MODEL", "gemini-1.5-flash-latest")
+        # Antigravity-only proxy
+        self.use_antigravity = True
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8082"))
         # Default to INFO so normal routing logs are visible.
@@ -118,21 +110,10 @@ class Config:
             "ANTIGRAVITY_OPUS_MODEL", "antigravity-claude-opus-4-5-thinking"
         )
 
-    def validate_api_key(self):
-        """Basic API key validation"""
-        if not self.gemini_api_key:
-            return False
-        # Basic format check for Google API keys
-        if not (self.gemini_api_key.startswith("AIza") and len(self.gemini_api_key) == 39):
-            return False
-        return True
-
 
 try:
     config = Config()
-    print(
-        f"✅ Configuration loaded: API_KEY={'*' * 20}..., BIG_MODEL='{config.big_model}', SMALL_MODEL='{config.small_model}'"
-    )
+    print("✅ Configuration loaded: Antigravity-only (OAuth)")
 except Exception as e:
     print(f"🔴 Configuration Error: {e}")
     sys.exit(1)
@@ -146,60 +127,14 @@ litellm.num_retries = config.max_retries
 class ModelManager:
     def __init__(self, config):
         self.config = config
-        self.base_gemini_models = [
-            "gemini-1.5-pro-latest",
-            "gemini-1.5-pro-preview-0514",
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-flash-preview-0514",
-            "gemini-pro",
-            "gemini-2.5-pro-preview-05-06",
-            "gemini-2.5-flash-preview-04-17",
-            "gemini-2.0-flash-exp",
-            "gemini-exp-1206",
-        ]
-        self._gemini_models = set(self.base_gemini_models)
-        self._add_env_models()
+        self.token_counter_model = os.environ.get("TOKEN_COUNTER_MODEL", "gemini-1.5-flash-latest")
 
-    def _add_env_models(self):
-        for model in [self.config.big_model, self.config.small_model]:
-            if model.startswith("gemini") and model not in self._gemini_models:
-                self._gemini_models.add(model)
-
-    @property
-    def gemini_models(self) -> List[str]:
-        return sorted(list(self._gemini_models))
-
-    def validate_and_map_model(self, original_model: str) -> tuple[str, bool]:
-        clean_model = self._clean_model_name(original_model)
-        mapped_model = self._map_model_alias(clean_model)
-
-        if mapped_model != clean_model:
-            return f"gemini/{mapped_model}", True
-        elif clean_model in self._gemini_models:
-            return f"gemini/{clean_model}", True
-        elif not original_model.startswith("gemini/"):
-            return f"gemini/{original_model}", False
-        else:
-            return original_model, False
-
-    def _clean_model_name(self, model: str) -> str:
-        if model.startswith("gemini/"):
-            return model[7:]
-        elif model.startswith("anthropic/"):
+    def normalize_request_model(self, model: str) -> str:
+        if model.startswith("anthropic/"):
             return model[10:]
-        elif model.startswith("openai/"):
+        if model.startswith("openai/"):
             return model[7:]
         return model
-
-    def _map_model_alias(self, clean_model: str) -> str:
-        model_lower = clean_model.lower()
-
-        if "haiku" in model_lower:
-            return self.config.small_model
-        elif "sonnet" in model_lower or "opus" in model_lower:
-            return self.config.big_model
-
-        return clean_model
 
     def get_antigravity_model(self, original_model: str) -> Optional[str]:
         """
@@ -208,10 +143,11 @@ class ModelManager:
         Returns:
             The Antigravity model name or None if not applicable
         """
-        if not self.config.use_antigravity:
-            return None
+        cleaned = self.normalize_request_model(original_model)
+        if cleaned.startswith("antigravity-"):
+            return cleaned
 
-        model_lower = original_model.lower()
+        model_lower = cleaned.lower()
 
         if "haiku" in model_lower:
             return self.config.antigravity_haiku_model
@@ -220,7 +156,7 @@ class ModelManager:
         elif "opus" in model_lower:
             return self.config.antigravity_opus_model
 
-        return None
+        return get_model_for_claude_alias(cleaned)
 
 
 model_manager = ModelManager(config)
@@ -270,23 +206,23 @@ root_logger.addFilter(SimpleMessageFilter())
 for uvicorn_logger in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
     logging.getLogger(uvicorn_logger).setLevel(logging.WARNING)
 
-app = FastAPI(title="Gemini-to-Claude API Proxy", version="2.5.0")
+app = FastAPI(title="Antigravity Claude Code Proxy", version="2.5.0")
 antigravity_request_lock = asyncio.Semaphore(1)
 
 
 # Enhanced error classification
-def classify_gemini_error(error_msg: str) -> str:
-    """Provide specific error guidance for common Gemini issues."""
+def classify_proxy_error(error_msg: str) -> str:
+    """Provide specific error guidance for common proxy issues."""
     error_lower = error_msg.lower()
 
     # Streaming/parsing errors
     if "error parsing chunk" in error_lower and "expecting property name" in error_lower:
-        return "Gemini streaming parsing error (malformed JSON chunk). This is a known intermittent Gemini API issue. Please try again or disable streaming by setting stream=false."
+        return "Streaming parsing error (malformed JSON chunk). Please retry or disable streaming by setting stream=false."
 
     # Tool schema validation errors
     if "function_declarations" in error_lower and "format" in error_lower:
         if "only 'enum' and 'date-time' are supported" in error_lower:
-            return "Tool schema error: Gemini only supports 'enum' and 'date-time' formats for string parameters. Remove other format types like 'url', 'email', 'uri', etc."
+            return "Tool schema error: remove unsupported string formats like 'url', 'email', or 'uri'."
         else:
             return "Tool schema validation error. Check your tool parameter definitions for unsupported format types or properties."
 
@@ -298,11 +234,13 @@ def classify_gemini_error(error_msg: str) -> str:
     elif (
         "api key" in error_lower or "authentication" in error_lower or "unauthorized" in error_lower
     ):
-        return "API key error. Please check that your GEMINI_API_KEY is valid and has the necessary permissions."
+        return (
+            "Authentication error. Please refresh your OAuth session and ensure your Antigravity account is valid."
+        )
 
     # Parsing/streaming issues
     elif "parsing" in error_lower or "json" in error_lower or "malformed" in error_lower:
-        return "Response parsing error. This is often a temporary Gemini API issue - please retry your request."
+        return "Response parsing error. Please retry your request."
 
     # Connection issues
     elif "connection" in error_lower or "timeout" in error_lower:
@@ -310,7 +248,7 @@ def classify_gemini_error(error_msg: str) -> str:
 
     # Safety/content filtering
     elif "safety" in error_lower or "content" in error_lower and "filter" in error_lower:
-        return "Content filtered by Gemini's safety systems. Please modify your request to comply with content policies."
+        return "Content filtered by provider safety systems. Please modify your request and retry."
 
     # Token/length issues
     elif "token" in error_lower and ("limit" in error_lower or "exceed" in error_lower):
@@ -321,11 +259,11 @@ def classify_gemini_error(error_msg: str) -> str:
 
 
 # Enhanced schema cleaner
-# NOTE: This is used for both Gemini and Antigravity function schemas.
-def clean_gemini_schema(schema: Any) -> Any:
+# NOTE: This is used for Antigravity function schemas.
+def clean_antigravity_schema(schema: Any) -> Any:
     """Recursively remove/normalize unsupported JSON-schema fields."""
     if isinstance(schema, dict):
-        # Remove fields unsupported by Gemini / Antigravity schema parsers
+        # Remove fields unsupported by Antigravity schema parsers
         for key in (
             "additionalProperties",
             "default",
@@ -352,7 +290,7 @@ def clean_gemini_schema(schema: Any) -> Any:
             allowed_formats = {"enum", "date-time"}
             if schema["format"] not in allowed_formats:
                 logger.debug(
-                    f"Removing unsupported format '{schema['format']}' for string type in Gemini schema"
+                    f"Removing unsupported format '{schema['format']}' for string type in Antigravity schema"
                 )
                 schema.pop("format")
 
@@ -368,10 +306,10 @@ def clean_gemini_schema(schema: Any) -> Any:
 
         # Recursively clean nested schemas
         for key, value in list(schema.items()):
-            schema[key] = clean_gemini_schema(value)
+            schema[key] = clean_antigravity_schema(value)
 
     elif isinstance(schema, list):
-        return [clean_gemini_schema(item) for item in schema]
+        return [clean_antigravity_schema(item) for item in schema]
 
     return schema
 
@@ -456,14 +394,7 @@ class MessagesRequest(BaseModel):
     @classmethod
     def validate_model_field(cls, v, info):
         original_model = v
-        mapped_model, was_mapped = model_manager.validate_and_map_model(v)
-
-        logger.debug(
-            f"📋 MODEL VALIDATION: Original='{original_model}', Big='{config.big_model}', Small='{config.small_model}'"
-        )
-
-        if was_mapped:
-            logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{mapped_model}'")
+        mapped_model = model_manager.normalize_request_model(v)
 
         if info and hasattr(info, "data") and isinstance(info.data, dict):
             info.data["original_model"] = original_model
@@ -483,7 +414,7 @@ class TokenCountRequest(BaseModel):
     @field_validator("model")
     @classmethod
     def validate_model_token_count(cls, v, info):
-        mapped_model, _ = model_manager.validate_and_map_model(v)
+        mapped_model = model_manager.normalize_request_model(v)
         if info and hasattr(info, "data") and isinstance(info.data, dict):
             info.data["original_model"] = v
         return mapped_model
@@ -545,7 +476,7 @@ def parse_tool_result_content(content):
 
 # Enhanced message conversion
 def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str, Any]:
-    """Convert Anthropic API request format to LiteLLM format for Gemini."""
+    """Convert Anthropic API request format to LiteLLM format for Antigravity."""
     litellm_messages = []
     tool_id_to_name: Dict[str, str] = {}
 
@@ -582,7 +513,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
             if block.type == Constants.CONTENT_TEXT:
                 text_parts.append(block.text)
             elif block.type == Constants.CONTENT_THINKING:
-                # Skip model thinking blocks when forwarding to Gemini
+                # Skip model thinking blocks when forwarding to Antigravity
                 continue
             elif block.type == Constants.CONTENT_IMAGE:
                 if (
@@ -639,6 +570,15 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
 
                 # Add tool result as separate "tool" role message
                 parsed_content = parse_tool_result_content(block.content)
+                preview = ""
+                if isinstance(parsed_content, str):
+                    preview = parsed_content[:120].replace("\n", " ")
+                logger.debug(
+                    "Tool result received: tool_use_id=%s type=%s preview=%s",
+                    block.tool_use_id,
+                    type(parsed_content).__name__,
+                    preview,
+                )
                 logger.debug(
                     "Tool result captured: tool_use_id=%s type=%s size=%s",
                     block.tool_use_id,
@@ -727,7 +667,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
             if tool.name and tool.name.strip():
                 if tool.name == "TodoWrite":
                     continue
-                cleaned_schema = clean_gemini_schema(tool.input_schema)
+                cleaned_schema = clean_antigravity_schema(tool.input_schema)
                 valid_tools.append(
                     {
                         "type": Constants.TOOL_FUNCTION,
@@ -760,7 +700,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         else:
             litellm_request["tool_choice"] = "auto"
 
-    # Add thinking configuration (Gemini specific)
+    # Add thinking configuration (Antigravity specific)
     if anthropic_request.thinking is not None:
         if anthropic_request.thinking.enabled:
             litellm_request["thinkingConfig"] = {"thinkingBudget": 24576}
@@ -782,7 +722,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
 def convert_litellm_to_anthropic(
     litellm_response, original_request: MessagesRequest
 ) -> MessagesResponse:
-    """Convert LiteLLM (Gemini) response back to Anthropic API format."""
+    """Convert LiteLLM response back to Anthropic API format."""
     try:
         # Extract response data safely
         response_id = f"msg_{uuid.uuid4()}"
@@ -1198,7 +1138,7 @@ async def handle_streaming_with_recovery(
                     and "Expecting property name enclosed in double quotes" in error_msg
                 ):
                     logger.warning(
-                        f"Gemini malformed chunk error (attempt {consecutive_errors}/{max_consecutive_errors})"
+                        f"Malformed upstream chunk (attempt {consecutive_errors}/{max_consecutive_errors})"
                     )
 
                     if consecutive_errors >= max_consecutive_errors:
@@ -1208,7 +1148,10 @@ async def handle_streaming_with_recovery(
                         stream_terminated_early = True
 
                         # Send error info to client
-                        error_text = f"\n⚠️ Gemini streaming encountered repeated malformed chunks. This is a known API issue.\n"
+                        error_text = (
+                            "\n⚠️ Streaming encountered repeated malformed chunks. "
+                            "This is a known upstream API issue.\n"
+                        )
                         yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': text_block_index, 'delta': {'type': Constants.DELTA_TEXT, 'text': error_text}})}\n\n"
                         break
 
@@ -1421,7 +1364,7 @@ async def _handle_antigravity_request(
             return response
 
     except Exception as e:
-        # Antigravity-only proxy: do not fall back to Gemini.
+        # Antigravity-only proxy: no API-key fallback.
         # Surface the upstream error message (auth/quota/schema) to make debugging easier.
         if (
             "AntigravityRateLimitError" in globals()
@@ -1512,7 +1455,7 @@ async def count_tokens(request: TokenCountRequest, raw_request: Request):
 
         # Count tokens
         token_count = litellm.token_counter(
-            model=litellm_data["model"],
+            model=model_manager.token_counter_model,
             messages=litellm_data["messages"],
         )
 
@@ -1520,7 +1463,7 @@ async def count_tokens(request: TokenCountRequest, raw_request: Request):
 
     except Exception as e:
         logger.error(f"Error counting tokens: {str(e)}")
-        error_msg = classify_gemini_error(str(e))
+        error_msg = classify_proxy_error(str(e))
         raise HTTPException(status_code=500, detail=f"Error counting tokens: {error_msg}")
 
 
@@ -1531,8 +1474,6 @@ async def health_check():
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "version": "2.5.0",
-            "gemini_api_configured": bool(config.gemini_api_key),
-            "api_key_valid": config.validate_api_key(),
             "streaming_config": {
                 "force_disabled": config.force_disable_streaming,
                 "emergency_disabled": config.emergency_disable_streaming,
@@ -1564,7 +1505,7 @@ async def antigravity_status():
     if not config.use_antigravity:
         return {
             "enabled": False,
-            "message": "Antigravity is not enabled. Set USE_ANTIGRAVITY=true to enable.",
+            "message": "Antigravity is not enabled.",
         }
 
     if not quota_manager:
@@ -1576,71 +1517,14 @@ async def antigravity_status():
     return quota_manager.get_status()
 
 
-@app.get("/test-connection")
-async def test_connection():
-    """Test API connectivity to Gemini"""
-    try:
-        # Simple test request to verify API connectivity
-        test_response = await litellm.acompletion(
-            model="gemini/gemini-1.5-flash-latest",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=5,
-            api_key=config.gemini_api_key,
-        )
-
-        return {
-            "status": "success",
-            "message": "Successfully connected to Gemini API",
-            "model_used": "gemini-1.5-flash-latest",
-            "timestamp": datetime.now().isoformat(),
-            "response_id": getattr(test_response, "id", "unknown"),
-        }
-
-    except litellm.exceptions.APIError as e:
-        logger.error(f"API connectivity test failed: {e}")
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "failed",
-                "error_type": "API Error",
-                "message": classify_gemini_error(str(e)),
-                "timestamp": datetime.now().isoformat(),
-                "suggestions": [
-                    "Check your GEMINI_API_KEY is valid",
-                    "Verify your API key has the necessary permissions",
-                    "Check if you have reached rate limits",
-                ],
-            },
-        )
-    except Exception as e:
-        logger.error(f"Connection test failed: {e}")
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "failed",
-                "error_type": "Connection Error",
-                "message": classify_gemini_error(str(e)),
-                "timestamp": datetime.now().isoformat(),
-                "suggestions": [
-                    "Check your internet connection",
-                    "Verify firewall settings allow HTTPS traffic",
-                    "Try again in a few moments",
-                ],
-            },
-        )
-
 
 @app.get("/")
 async def root():
     config_data = {
-        "message": f"Enhanced Gemini-to-Claude API Proxy v2.5.0",
+        "message": "Antigravity Claude Code Proxy v2.5.0",
         "status": "running",
         "config": {
-            "big_model": config.big_model,
-            "small_model": config.small_model,
-            "available_models": model_manager.gemini_models[:5],
             "max_tokens_limit": config.max_tokens_limit,
-            "api_key_configured": bool(config.gemini_api_key),
             "streaming": {
                 "force_disabled": config.force_disable_streaming,
                 "emergency_disabled": config.emergency_disable_streaming,
@@ -1658,7 +1542,6 @@ async def root():
             "messages": "/v1/messages",
             "count_tokens": "/v1/messages/count_tokens",
             "health": "/health",
-            "test_connection": "/test-connection",
             "antigravity_status": "/antigravity-status",
         },
     }
@@ -1686,20 +1569,21 @@ def log_request_beautifully(
     method: str,
     path: str,
     requested_model: str,
-    gemini_model_used: str,
+    provider_model_used: str,
     num_messages: int,
     num_tools: int,
     status_code: int,
 ):
     if not sys.stdout.isatty():
         print(
-            f"{method} {path} - {requested_model} -> {gemini_model_used} ({num_messages} messages, {num_tools} tools)"
+            f"{method} {path} - {requested_model} -> {provider_model_used} "
+            f"({num_messages} messages, {num_tools} tools)"
         )
         return
 
     # Colorized logging for TTY
     req_display = f"{Colors.CYAN}{requested_model}{Colors.RESET}"
-    gemini_display = f"{Colors.GREEN}{gemini_model_used.replace('gemini/', '')}{Colors.RESET}"
+    provider_display = f"{Colors.GREEN}{provider_model_used}{Colors.RESET}"
 
     endpoint = path.split("?")[0] if "?" in path else path
     tools_str = f"{Colors.MAGENTA}{num_tools} tools{Colors.RESET}"
@@ -1711,7 +1595,9 @@ def log_request_beautifully(
         status_str = f"{Colors.RED}✗ {status_code}{Colors.RESET}"
 
     log_line = f"{Colors.BOLD}{method} {endpoint}{Colors.RESET} {status_str}"
-    model_line = f"Request: {req_display} → Gemini: {gemini_display} ({tools_str}, {messages_str})"
+    model_line = (
+        f"Request: {req_display} → Antigravity: {provider_display} ({tools_str}, {messages_str})"
+    )
 
     print(log_line)
     print(model_line)
@@ -1722,16 +1608,19 @@ def validate_startup():
     """Validate configuration and connectivity on startup"""
     print("🔍 Validating startup configuration...")
 
-    # Check API key (only required if not using Antigravity-only mode)
-    if not config.gemini_api_key:
-        if config.use_antigravity:
-            print("✅ Antigravity mode: GEMINI_API_KEY not required (using OAuth)")
-        else:
-            print("🔴 FATAL: GEMINI_API_KEY is not set")
-            return False
-    else:
-        if not config.validate_api_key():
-            print("⚠️ WARNING: API key format validation failed")
+    if not config.use_antigravity:
+        print("🔴 FATAL: Antigravity is disabled. This proxy only supports OAuth.")
+        return False
+
+    if not ANTIGRAVITY_AVAILABLE:
+        print("🔴 FATAL: Antigravity dependencies are missing.")
+        print("   pip install aiohttp google-auth-oauth-lib google-auth")
+        return False
+
+    if not auth_manager or auth_manager.account_count() == 0:
+        print("🔴 FATAL: No Antigravity OAuth accounts configured.")
+        print("   Run: python -m gclaude init")
+        return False
 
     # Check network connectivity (basic)
     try:
@@ -1758,7 +1647,7 @@ def main():
         sys.exit(0)
 
     if len(sys.argv) > 1 and sys.argv[1] == "--help":
-        print("Enhanced Gemini-to-Claude API Proxy v2.5.0")
+        print("Antigravity Claude Code Proxy v2.5.0")
         print("")
         print("Usage: python -m gclaude.proxy.server [--antigravity-login] [--help]")
         print("       uvicorn gclaude.proxy.server:app --reload --host 0.0.0.0 --port 8082")
@@ -1767,12 +1656,7 @@ def main():
         print("  --antigravity-login   Authenticate with Google OAuth for Antigravity")
         print("  --help                Show this help message")
         print("")
-        print("Required environment variables:")
-        print("  GEMINI_API_KEY - Your Google Gemini API key")
-        print("")
         print("Optional environment variables:")
-        print(f"  BIG_MODEL - Big model name (default: gemini-1.5-pro-latest)")
-        print(f"  SMALL_MODEL - Small model name (default: gemini-1.5-flash-latest)")
         print(f"  HOST - Server host (default: 0.0.0.0)")
         print(f"  PORT - Server port (default: 8082)")
         print(f"  LOG_LEVEL - Logging level (default: WARNING)")
@@ -1782,9 +1666,9 @@ def main():
         print(f"  MAX_STREAMING_RETRIES - Maximum streaming retries (default: 2)")
         print(f"  FORCE_DISABLE_STREAMING - Force disable streaming (default: false)")
         print(f"  EMERGENCY_DISABLE_STREAMING - Emergency disable streaming (default: false)")
+        print(f"  TOKEN_COUNTER_MODEL - Token counter model id (default: gemini-1.5-flash-latest)")
         print("")
-        print("Antigravity settings:")
-        print(f"  USE_ANTIGRAVITY - Enable Antigravity OAuth (default: false)")
+        print("Antigravity model settings:")
         print(f"  ANTIGRAVITY_HAIKU_MODEL - Model for haiku (default: antigravity-gemini-3-flash)")
         print(
             "  ANTIGRAVITY_SONNET_MODEL - Model for sonnet (default: antigravity-claude-sonnet-4-5-thinking)"
@@ -1793,9 +1677,6 @@ def main():
             "  ANTIGRAVITY_OPUS_MODEL - Model for opus (default: antigravity-claude-opus-4-5-thinking)"
         )
         print("")
-        print("Available Gemini models:")
-        for model in model_manager.gemini_models:
-            print(f"  - {model}")
         sys.exit(0)
 
     # Validate startup configuration
@@ -1804,11 +1685,11 @@ def main():
         sys.exit(1)
 
     # Configuration summary
-    print("🚀 Enhanced Gemini-to-Claude API Proxy v2.5.0")
+    print("🚀 Antigravity Claude Code Proxy v2.5.0")
     print(f"✅ Configuration loaded successfully")
-    print(f"   Big Model: {config.big_model}")
-    print(f"   Small Model: {config.small_model}")
-    print(f"   Available Models: {len(model_manager.gemini_models)}")
+    print(f"   Haiku Model: {config.antigravity_haiku_model}")
+    print(f"   Sonnet Model: {config.antigravity_sonnet_model}")
+    print(f"   Opus Model: {config.antigravity_opus_model}")
     print(f"   Max Tokens Limit: {config.max_tokens_limit}")
     print(f"   Request Timeout: {config.request_timeout}s")
     print(f"   Max Retries: {config.max_retries}")

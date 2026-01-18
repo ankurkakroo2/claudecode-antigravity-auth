@@ -46,6 +46,10 @@ class ProxyServer:
 
         return Path(__file__)
 
+    def get_project_root(self) -> Path:
+        """Get the project root for module execution."""
+        return Path(__file__).resolve().parent.parent
+
     def start(self) -> tuple[bool, str]:
         """
         Start the proxy server in the background.
@@ -64,8 +68,6 @@ class ProxyServer:
         env = os.environ.copy()
 
         # Set environment variables from config
-        env["GEMINI_API_KEY"] = self.config.fallback_api_key or ""
-        env["USE_ANTIGRAVITY"] = "true" if self.config.auth_enabled else "false"
         env["HOST"] = self.config.proxy_host
         env["PORT"] = str(self.config.proxy_port)
         env["LOG_LEVEL"] = self.config.log_level
@@ -78,21 +80,18 @@ class ProxyServer:
                 if target_model and model_config.get("type") == "antigravity":
                     env[f"ANTIGRAVITY_{name.upper()}_MODEL"] = target_model
 
-        # Get server script path
-        server_script = self.get_server_script_path()
-
         # Start the server
         try:
             # Open log file for appending
             log_file = open(self.log_path, "a")
 
             process = subprocess.Popen(
-                [sys.executable, str(server_script)],
+                [sys.executable, "-m", "gclaude.proxy.server"],
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 env=env,
-                cwd=str(server_script.parent),
+                cwd=str(self.get_project_root()),
                 start_new_session=True,
             )
 

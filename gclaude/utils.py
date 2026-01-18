@@ -107,18 +107,18 @@ def get_default_models() -> dict[str, dict[str, str]]:
     return {
         "haiku": {
             "pattern": "*haiku*",
-            "target": "gemini-2.0-flash-exp",
-            "type": "gemini",
+            "target": "antigravity-gemini-3-flash",
+            "type": "antigravity",
         },
         "sonnet": {
             "pattern": "*sonnet*",
-            "target": "gemini-2.5-pro-preview",
-            "type": "gemini",
+            "target": "antigravity-claude-sonnet-4-5-thinking",
+            "type": "antigravity",
         },
         "opus": {
             "pattern": "*opus*",
-            "target": "gemini-2.5-pro-preview",
-            "type": "gemini",
+            "target": "antigravity-claude-opus-4-5-thinking",
+            "type": "antigravity",
         },
     }
 
@@ -170,38 +170,3 @@ def get_available_antigravity_models() -> list[dict]:
         },
     ]
 
-
-def get_available_gemini_models() -> list[dict]:
-    """Get list of standard Gemini models as fallback options."""
-    return [
-        {
-            "id": "gemini-2.0-flash-exp",
-            "name": "Gemini 2.0 Flash Exp",
-            "description": "Experimental - Very Fast",
-            "type": "gemini",
-        },
-        {
-            "id": "gemini-2.5-flash-preview-04-17",
-            "name": "Gemini 2.5 Flash Preview",
-            "description": "Latest Flash Model",
-            "type": "gemini",
-        },
-        {
-            "id": "gemini-2.5-pro-preview",
-            "name": "Gemini 2.5 Pro Preview",
-            "description": "Latest Pro Model",
-            "type": "gemini",
-        },
-        {
-            "id": "gemini-1.5-flash-latest",
-            "name": "Gemini 1.5 Flash",
-            "description": "Stable Fast Model",
-            "type": "gemini",
-        },
-        {
-            "id": "gemini-1.5-pro-latest",
-            "name": "Gemini 1.5 Pro",
-            "description": "Stable Capable Model",
-            "type": "gemini",
-        },
-    ]

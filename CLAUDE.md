@@ -6,15 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **gemini-claude-proxy**, a proxy server that translates between Anthropic's Messages API format (used by Claude Code) and Google's Gemini API. It enables using Claude Code CLI with Google Gemini or Antigravity (OAuth) models as the backend.
+This is **gemini-claude-proxy**, an **Antigravity OAuth-only** proxy server that translates between Anthropic's Messages API format (used by Claude Code) and the Antigravity API. It enables using Claude Code CLI with Google OAuth-backed models (Claude + Gemini via Antigravity).
 
-**Key capability:** The proxy includes Antigravity OAuth integration, which provides access to higher-quota Google AI subscription models.
+**Key capability:** Antigravity OAuth integration with higher-quota Google AI subscription models.
 
 ---
 
 ## Repository Structure
-
-The repository is a single top-level package:
 
 - `gclaude/` - Python package with CLI tool (recommended approach)
 - `gclaude/proxy/server.py` - FastAPI app (can be run directly)
@@ -111,23 +109,13 @@ Claude Code CLI
        │
        ├─► Model Pattern Matching (*haiku*, *sonnet*, *opus*)
        │
-       ├─► Mode Selection
-       │    ├─► USE_ANTIGRAVITY=true → Antigravity API (OAuth)
-       │    └─► USE_ANTIGRAVITY=false → Gemini API (API key)
-       │
-       ▼
-┌──────────────────────┐
-│  Translation Layer   │
-│  Anthropic ↔ Gemini  │
-└──────────────────────┘
-       │
-       ▼
-Gemini or Antigravity API
+       └─► Antigravity API (OAuth)
+              │
+              ▼
+        Antigravity Backend
 ```
 
 ### Key Components
-
-**gclaude Package Structure:**
 
 | File | Purpose |
 |------|---------|
@@ -139,73 +127,63 @@ Gemini or Antigravity API
 | `gclaude/utils.py` | Utility functions (paths, process management) |
 | `gclaude/proxy/antigravity_auth.py` | OAuth 2.0 with PKCE implementation |
 | `gclaude/proxy/antigravity_client.py` | Antigravity API client |
-| `gclaude/proxy/quota_manager.py` | Quota management between Antigravity and Gemini |
-| `gclaude/proxy/server.py` | FastAPI app (Claude ↔ Antigravity/Gemini) |
-
-**gclaude/proxy/server.py:**
-
-- FastAPI application used by the CLI wrapper
-- Can be run directly or via `python -m gclaude.proxy.server`
-- Contains request/response translation logic
+| `gclaude/proxy/quota_manager.py` | Quota management |
+| `gclaude/proxy/server.py` | FastAPI app (Claude ↔ Antigravity) |
 
 ### Request Flow
 
 1. Claude Code sends request to `http://localhost:8082/v1/messages` (Anthropic format)
 2. Proxy extracts model name and matches against patterns:
-   - `*haiku*` → small model (e.g., `gemini-1.5-flash-latest`)
-   - `*sonnet*` or `*opus*` → big model (e.g., `gemini-1.5-pro-latest`)
-3. Check authentication:
-   - If OAuth enabled and token valid → use Antigravity API
-   - Otherwise → use Gemini API key (fallback)
-4. Translate request:
-   - Anthropic message format → Gemini/LiteLLM format
-   - Tool definitions → Gemini function calling format
-   - Content blocks (text, images, tool_use, tool_result)
-5. Call backend API
-6. Translate response:
-   - Gemini format → Anthropic Messages API format
-   - Handle streaming with error recovery
-   - Convert tool calls and results
+   - `*haiku*` → `ANTIGRAVITY_HAIKU_MODEL`
+   - `*sonnet*` → `ANTIGRAVITY_SONNET_MODEL`
+   - `*opus*` → `ANTIGRAVITY_OPUS_MODEL`
+3. Proxy translates request to Antigravity format and forwards via OAuth
+4. Response is translated back to the Anthropic Messages API format
 
 ---
 
 ## Configuration
 
-### Environment Variables (.env)
-
-**Required:**
-- `GEMINI_API_KEY` - Google AI Studio API key (fallback when OAuth unavailable)
+### Environment Variables
 
 **Optional:**
-- `BIG_MODEL` - Model for sonnet/opus requests (default: `gemini-1.5-pro-latest`)
-- `SMALL_MODEL` - Model for haiku requests (default: `gemini-1.5-flash-latest`)
 - `HOST` - Server host (default: `0.0.0.0`)
 - `PORT` - Server port (default: `8082`)
-- `LOG_LEVEL` - Logging level (default: `WARNING`)
+- `LOG_LEVEL` - Logging level (default: `INFO`)
 - `MAX_TOKENS_LIMIT` - Max tokens for responses (default: `8192`)
 - `REQUEST_TIMEOUT` - Request timeout in seconds (default: `90`)
-- `MAX_RETRIES` - LiteLLM retry attempts (default: `2`)
+- `MAX_RETRIES` - Retry attempts (default: `2`)
 - `MAX_STREAMING_RETRIES` - Streaming retry attempts (default: `12`)
 - `FORCE_DISABLE_STREAMING` - Disable streaming globally (default: `false`)
-- `USE_ANTIGRAVITY` - Enable Antigravity OAuth (default: `false`)
+- `EMERGENCY_DISABLE_STREAMING` - Emergency streaming disable (default: `false`)
+- `TOKEN_COUNTER_MODEL` - Token counter model id (default: `gemini-1.5-flash-latest`)
 
-### gclaude Config File (~/.gclaude/config.json)
+**Antigravity Model Overrides:**
+- `ANTIGRAVITY_HAIKU_MODEL` (default: `antigravity-gemini-3-flash`)
+- `ANTIGRAVITY_SONNET_MODEL` (default: `antigravity-claude-sonnet-4-5-thinking`)
+- `ANTIGRAVITY_OPUS_MODEL` (default: `antigravity-claude-opus-4-5-thinking`)
+
+### gclaude Config File (`~/.gclaude/config.json`)
 
 Created by `python -m gclaude init`:
 
 ```json
 {
   "version": "1.0.0",
-  "proxy_host": "127.0.0.1",
-  "proxy_port": 8082,
-  "auth_enabled": true,
-  "account_email": "user@gmail.com",
+  "proxy": {
+    "host": "127.0.0.1",
+    "port": 8082,
+    "log_level": "INFO"
+  },
+  "auth": {
+    "enabled": true,
+    "account_email": "user@gmail.com"
+  },
   "models": {
     "haiku": {"pattern": "*haiku*", "target": "antigravity-gemini-3-flash", "type": "antigravity"},
-    "sonnet": {"pattern": "*sonnet*", "target": "antigravity-gemini-3-pro", "type": "antigravity"},
-    "opus": {"pattern": "*opus*", "target": "antigravity-claude-opus-4.5-thinking", "type": "antigravity"}
-  },
-  "fallback_api_key": "AIzaSy..."
+    "sonnet": {"pattern": "*sonnet*", "target": "antigravity-claude-sonnet-4-5-thinking", "type": "antigravity"},
+    "opus": {"pattern": "*opus*", "target": "antigravity-claude-opus-4-5-thinking", "type": "antigravity"}
+  }
 }
 ```
 
@@ -213,26 +191,24 @@ Created by `python -m gclaude init`:
 
 ## Model Mapping
 
-### Claude Code Patterns
+The proxy maps Claude Code model requests to Antigravity models:
 
-The proxy maps Claude Code model requests to Gemini/Antigravity models:
-
-| Claude Code Request | Default Mapping | Antigravity Option |
-|---------------------|-----------------|-------------------|
-| `*haiku*` | `gemini-1.5-flash-latest` | `antigravity-gemini-3-flash` |
-| `*sonnet*` | `gemini-1.5-pro-latest` | `antigravity-gemini-3-pro-high` or `antigravity-claude-sonnet-4-5-thinking` |
-| `*opus*` | `gemini-1.5-pro-latest` | `antigravity-claude-opus-4.5-thinking` |
+| Claude Code Request | Default Mapping |
+|---------------------|-----------------|
+| `*haiku*` | `antigravity-gemini-3-flash` |
+| `*sonnet*` | `antigravity-claude-sonnet-4-5-thinking` |
+| `*opus*` | `antigravity-claude-opus-4-5-thinking` |
 
 ### Available Antigravity Models
 
 When authenticated with Google OAuth, these models may be available:
 
-- `antigravity-gemini-3-flash` - Fast & efficient
-- `antigravity-gemini-3-pro-low` - Faster responses, less thinking
-- `antigravity-gemini-3-pro-high` - Deeper reasoning
-- `antigravity-claude-sonnet-4-5` - Balanced capability
-- `antigravity-claude-sonnet-4-5-thinking` - Extended reasoning
-- `antigravity-claude-opus-4-5-thinking` - Advanced reasoning
+- `antigravity-gemini-3-flash`
+- `antigravity-gemini-3-pro-low`
+- `antigravity-gemini-3-pro-high`
+- `antigravity-claude-sonnet-4-5`
+- `antigravity-claude-sonnet-4-5-thinking`
+- `antigravity-claude-opus-4-5-thinking`
 
 The `gclaude init` command automatically detects which models you have access to.
 
@@ -240,183 +216,27 @@ The `gclaude init` command automatically detects which models you have access to
 
 ## Translation Layer Details
 
-### Anthropic → Gemini
+### Anthropic → Antigravity
 
 **Content Blocks:**
-- `text` → Gemini text content
-- `image` → Gemini inline image data
-- `tool_use` → Gemini function call
-- `tool_result` → Gemini function response
+- `text` → Antigravity text content
+- `image` → Antigravity inline image data
+- `tool_use` → Antigravity function call
+- `tool_result` → Antigravity function response
 
 **Tools/Functions:**
-- Anthropic `Tool` format → Gemini `FunctionDeclaration`
-- Schema cleaning: Removes `additionalProperties`, `default`, unsupported `format` values
+- Anthropic `Tool` format → Antigravity function declaration
+- Schema cleaning: Removes unsupported JSON-schema fields
 
 **System Messages:**
-- Anthropic system parameter → Gemini system instruction
+- Anthropic `system` parameter → Antigravity system instruction
 
-### Gemini → Anthropic
+### Antigravity → Anthropic
 
 **Streaming Response:**
-- Gemini server-sent events → Anthropic streaming format
-- Error recovery for malformed chunks
-- Automatic retry with exponential backoff
-- Fallback to non-streaming on persistent errors
+- Handles partial chunks and malformed JSON with retry/backoff
+- Converts tool calls and results to Anthropic format
 
-**Tool Calls:**
-- Gemini function call → Anthropic `tool_use` content block
-- Generates unique tool_use_id
-
-**Stop Reasons:**
-- `STOP` → `end_turn`
-- `MAX_TOKENS` → `max_tokens`
-- `ERROR` → `error`
-
----
-
-## API Endpoints
-
-### Proxy Server Endpoints
-
-- `POST /v1/messages` - Main Claude Code API endpoint
-- `POST /v1/messages/count_tokens` - Token counting endpoint
-- `GET /health` - Health check with API status
-- `GET /test-connection` - Test API connectivity
-- `GET /` - Server info and configuration
-- `GET /antigravity-status` - Antigravity authentication and quota status
-
-### Example Usage
-
-```bash
-# Test health endpoint
-curl http://localhost:8082/health
-
-# Test connection
-curl http://localhost:8082/test-connection
-
-# Start Claude Code with proxy
-ANTHROPIC_BASE_URL=http://localhost:8082 claude
-
-# Or use the anticlaude alias (created by gclaude init)
-anticlaude
-```
-
----
-
-## Development Notes
-
-### Adding New Models
-
-To add a new Gemini model:
-
-1. Add to `ModelManager.base_gemini_models` in `gclaude/proxy/server.py`
-2. Or set via `BIG_MODEL`/`SMALL_MODEL` environment variables
-3. For Antigravity models, add to `get_available_antigravity_models()` in `gclaude/utils.py`
-
-### Streaming Error Handling
-
-The proxy has sophisticated streaming error recovery:
-- Malformed JSON chunks are buffered and retried
-- Exponential backoff for retries (configurable via `MAX_STREAMING_RETRIES`)
-- Automatic fallback to non-streaming mode
-- Connection error recovery for Gemini 500 errors
-
-If experiencing streaming issues:
-1. Check logs with `python -m gclaude logs`
-2. Try `FORCE_DISABLE_STREAMING=true` in `.env`
-3. Increase `MAX_STREAMING_RETRIES` for more resilience
-
-### Antigravity OAuth Flow
-
-The Antigravity integration uses OAuth 2.0 with PKCE:
-
-1. User runs `python -m gclaude init` or `python -m gclaude auth`
-2. Browser opens for Google OAuth authentication
-3. Authorization code exchanged for tokens
-4. Tokens stored in `~/.config/gclaude/antigravity-accounts.json`
-5. Access token automatically refreshed when expired
-6. Fallback to Gemini API key if OAuth fails
-
-**Quota Management:**
-- Primary: Antigravity OAuth endpoints (higher quota)
-- Fallback: Gemini API key (standard quota)
-- Automatic fallback on rate limit (429) or auth failure
-- Multiple Antigravity endpoints tried in order
-
----
-
-## File Conventions
-
-### Configuration Files
-
-- `.env` - Environment variables (create from `.env.example`)
-- `.gitignore` - Excludes `.env`, `.venv`, `__pycache__`, etc.
-- `~/.gclaude/config.json` - gclaude configuration (auto-created)
-- `~/.config/gclaude/antigravity-accounts.json` - OAuth tokens (auto-created)
-- `~/.claude/antigravity-settings.json` - Claude Code settings (auto-created)
-- `~/.gclaude/logs/proxy.log` - Proxy server logs (auto-created)
-
-### Python Code Style
-
-- **Line length:** 100 characters (Black configured)
-- **Imports:** Standard library → Third-party → Local
-- **Logging:** Use `logging` module, not `print()`
-- **Type hints:** Preferred for function signatures
-- **Error messages:** Be specific and actionable
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-**Port already in use:**
-```bash
-# Check what's using port 8082
-lsof -i :8082
-# Or change port in .env: PORT=8083
-```
-
-**OAuth authentication fails:**
-```bash
-# Remove stored accounts and try again
-rm ~/.config/gclaude/antigravity-accounts.json
-python -m gclaude auth
-```
-
-**Models not available:**
-```bash
-# Re-run model detection
-python -m gclaude init
-```
-
-**Streaming errors:**
-```bash
-# Check logs
-python -m gclaude logs
-
-# Disable streaming temporarily
-export FORCE_DISABLE_STREAMING=true
-python -m gclaude restart
-```
-
-**API key issues:**
-```bash
-# Verify API key format (should start with "AIza" and be 39 chars)
-python -c "import os; print(os.environ.get('GEMINI_API_KEY'))"
-
-# Test connection
-curl http://localhost:8082/test-connection
-```
-
----
-
-## Important Reminders
-
-- **Never commit `.env` files** - Contains API keys and secrets
-- **Never commit OAuth token files** - `~/.config/gclaude/antigravity-accounts.json`
-- **Test proxy health** before using with Claude Code: `curl http://localhost:8082/health`
-- **Check logs** when troubleshooting: `python -m gclaude logs`
-- **Use gclaude CLI** for easier management vs direct `gclaude/proxy/server.py` execution
-- **Model detection** helps identify which Antigravity models you can access
-- **Fallback works automatically** - if OAuth fails, proxy uses Gemini API key
+**Non-Streaming Response:**
+- Converts response content to Anthropic Messages API output
+- Normalizes stop reasons and token usage metadata

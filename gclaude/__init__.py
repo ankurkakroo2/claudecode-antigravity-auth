@@ -1,8 +1,8 @@
 """
-gclaude - Gemini → Claude Code Proxy with Antigravity OAuth
+gclaude - Antigravity OAuth proxy for Claude Code
 
-A seamless CLI tool for setting up and running a proxy server that translates
-Claude Code API requests to Gemini/Antigravity models.
+A CLI tool for setting up and running a proxy server that translates
+Claude Code API requests to Antigravity-backed models.
 """
 
 __version__ = "1.0.0"

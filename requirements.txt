@@ -5,7 +5,7 @@ pydantic>=2.0.0
 litellm>=1.40.14
 python-dotenv>=1.0.0
 
-# Antigravity OAuth dependencies (optional, for USE_ANTIGRAVITY=true)
+# Antigravity OAuth dependencies
 aiohttp>=3.9.0
 google-auth-oauthlib>=1.0.0
 google-auth>=2.20.0

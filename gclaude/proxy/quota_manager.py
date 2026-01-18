@@ -1,10 +1,6 @@
-"""Quota Manager for Antigravity Integration
+"""Quota Manager for Antigravity Integration.
 
 Antigravity-only quota routing.
-
-This repo originally supported a Gemini API-key fallback path; per current
-requirements we keep the proxy Antigravity-only to avoid confusing fallback
-behavior and to surface real Antigravity/OAuth errors.
 """
 
 import json
@@ -73,7 +69,7 @@ class QuotaState:
 
 
 class QuotaManager:
-    """Manages Antigravity quota + OAuth usage (no Gemini fallback)."""
+    """Manages Antigravity quota + OAuth usage."""
 
     def __init__(self, auth_manager: AntigravityAuthManager, use_antigravity: bool = True):
         self.auth_manager = auth_manager

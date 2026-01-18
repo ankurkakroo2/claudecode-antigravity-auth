@@ -210,9 +210,9 @@ def get_available_models_for_mapping(access_results: dict[str, bool]) -> list[di
         access_results: Dictionary from detect_model_access
 
     Returns:
-        List of available model dicts (Antigravity + fallback Gemini models)
+        List of available model dicts (Antigravity-only)
     """
-    from gclaude.utils import get_available_antigravity_models, get_available_gemini_models
+    from gclaude.utils import get_available_antigravity_models
 
     available = []
 
@@ -220,9 +220,6 @@ def get_available_models_for_mapping(access_results: dict[str, bool]) -> list[di
     for model in get_available_antigravity_models():
         if access_results.get(model["id"], True):
             available.append(model)
-
-    # Always add Gemini models as fallback
-    available.extend(get_available_gemini_models())
 
     return available
 
@@ -237,66 +234,45 @@ def get_recommended_mapping(access_results: Dict[str, bool]) -> Dict[str, Dict]:
     Returns:
         Dictionary with recommended mappings for haiku, sonnet, opus
     """
+    def pick_first_available(candidates: list[str]) -> str:
+        for candidate in candidates:
+            if access_results.get(candidate, False):
+                return candidate
+        return candidates[0]
+
     mapping = {}
 
-    # Haiku -> Flash (Antigravity or Gemini)
-    if access_results.get("antigravity-gemini-3-flash", False):
-        mapping["haiku"] = {
-            "target": "antigravity-gemini-3-flash",
-            "type": "antigravity",
-            "recommended": True,
-        }
-    else:
-        mapping["haiku"] = {
-            "target": "gemini-2.0-flash-exp",
-            "type": "gemini",
-            "recommended": True,
-        }
+    haiku_candidates = [
+        "antigravity-gemini-3-flash",
+        "antigravity-gemini-3-pro-low",
+        "antigravity-gemini-3-pro-high",
+    ]
+    sonnet_candidates = [
+        "antigravity-claude-sonnet-4-5-thinking",
+        "antigravity-claude-sonnet-4-5",
+        "antigravity-gemini-3-pro-high",
+        "antigravity-gemini-3-pro-low",
+    ]
+    opus_candidates = [
+        "antigravity-claude-opus-4-5-thinking",
+        "antigravity-claude-sonnet-4-5-thinking",
+        "antigravity-gemini-3-pro-high",
+    ]
 
-    # Sonnet -> Sonnet Thinking or Pro (Antigravity) or Gemini fallback
-    if access_results.get("antigravity-claude-sonnet-4-5-thinking", False):
-        mapping["sonnet"] = {
-            "target": "antigravity-claude-sonnet-4-5-thinking",
-            "type": "antigravity",
-            "recommended": True,
-        }
-    elif access_results.get("antigravity-claude-sonnet-4-5", False):
-        mapping["sonnet"] = {
-            "target": "antigravity-claude-sonnet-4-5",
-            "type": "antigravity",
-            "recommended": True,
-        }
-    elif access_results.get("antigravity-gemini-3-pro-high", False):
-        mapping["sonnet"] = {
-            "target": "antigravity-gemini-3-pro-high",
-            "type": "antigravity",
-            "recommended": True,
-        }
-    elif access_results.get("antigravity-gemini-3-pro-low", False):
-        mapping["sonnet"] = {
-            "target": "antigravity-gemini-3-pro-low",
-            "type": "antigravity",
-            "recommended": True,
-        }
-    else:
-        mapping["sonnet"] = {
-            "target": "gemini-2.5-pro-preview",
-            "type": "gemini",
-            "recommended": True,
-        }
-
-    # Opus -> Opus (Antigravity) or fallback to Gemini Pro
-    if access_results.get("antigravity-claude-opus-4-5-thinking", False):
-        mapping["opus"] = {
-            "target": "antigravity-claude-opus-4-5-thinking",
-            "type": "antigravity",
-            "recommended": True,
-        }
-    else:
-        mapping["opus"] = {
-            "target": "gemini-2.5-pro-preview",
-            "type": "gemini",
-            "recommended": True,
-        }
+    mapping["haiku"] = {
+        "target": pick_first_available(haiku_candidates),
+        "type": "antigravity",
+        "recommended": True,
+    }
+    mapping["sonnet"] = {
+        "target": pick_first_available(sonnet_candidates),
+        "type": "antigravity",
+        "recommended": True,
+    }
+    mapping["opus"] = {
+        "target": pick_first_available(opus_candidates),
+        "type": "antigravity",
+        "recommended": True,
+    }
 
     return mapping

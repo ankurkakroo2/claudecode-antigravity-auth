@@ -1,10 +1,10 @@
-# In Progress | Gemini for Claude Code: An Anthropic-Compatible Proxy
+# Antigravity OAuth Proxy for Claude Code
 
 ---
 
 ## Quick Start (OAuth / Google AI Pro)
 
-This path uses Google OAuth (Antigravity) and is the recommended way to get **Claude Sonnet/Opus** via a Google AI Pro subscription. No Gemini API key or `.env` file needed.
+This proxy is **Antigravity-only** (Google OAuth). No Gemini API key is supported or required.
 
 1. **Clone and enter the repo**
    ```bash
@@ -26,7 +26,6 @@ This path uses Google OAuth (Antigravity) and is the recommended way to get **Cl
    ```bash
    python -m gclaude start
    ```
-   If port `8082` is already in use, stop the other proxy instance or change `PORT`.
 5. **Create Claude Code settings**
    ```bash
    cat > ~/.claude/antigravity-settings.json <<'JSON'
@@ -44,7 +43,7 @@ This path uses Google OAuth (Antigravity) and is the recommended way to get **Cl
      claude --settings ~/.claude/antigravity-settings.json --dangerously-skip-permissions "$@"
    }
    ```
-7. **Verify (opencode is optional)**
+7. **Verify**
    ```bash
    opencode run -m google/antigravity-claude-sonnet-4-5-thinking "ping"
    opencode run -m google/antigravity-claude-opus-4-5-thinking "ping"
@@ -72,305 +71,123 @@ See the [gclaude CLI](#gclaude-cli) section for full commands and config paths.
 
 ---
 
-This server acts as a bridge, enabling you to use **Claude Code** with Google's powerful **Gemini models**. It translates API requests and responses between the Anthropic format (used by Claude Code) and the Gemini format (via LiteLLM), allowing seamless integration.
+This server bridges **Claude Code** with **Antigravity (Google OAuth)**. It translates requests from Anthropic's Messages API format into the Antigravity API and converts responses back so Claude Code can work seamlessly.
 
+![Claude Code with Antigravity Proxy](image.png)
 ## Features
 
-- **Antigravity OAuth (Google AI Pro)**: Use Claude Sonnet/Opus via Google OAuth (no API key required).
-- **Claude Code Compatibility with Gemini**: Directly use the Claude Code CLI with Google Gemini models.
-- **Seamless Model Mapping**: Intelligently maps Claude Code model requests (e.g., `haiku`, `sonnet`, `opus` aliases) to your chosen Gemini models.
-- **LiteLLM Integration**: Leverages LiteLLM for robust and flexible interaction with the Gemini API.
-- **Enhanced Streaming Support**: Handles streaming responses from Gemini with robust error recovery for malformed chunks and API errors.
-- **Complete Tool Use for Claude Code**: Translates Claude Code's tool usage (function calling) to and from Gemini's format, with robust handling of tool results.
-- **Advanced Error Handling**: Provides specific and actionable error messages for common Gemini/API issues and streaming retries.
-- **Resilient Architecture**: Gracefully handles Gemini API instability with smart retry logic and optional non-streaming mode.
-- **Diagnostic Endpoints**: Includes `/health`, `/antigravity-status`, and `/test-connection` (API key only) for easier troubleshooting.
-- **Token Counting**: Offers a `/v1/messages/count_tokens` endpoint compatible with Claude Code.
-
-## Recent Improvements (v2.5.0)
-
-### 🛡️ Enhanced Error Resilience
-- **Malformed Chunk Recovery**: Automatically detects and handles malformed JSON chunks from Gemini streaming
-- **Smart Retry Logic**: Exponential backoff with configurable retry limits for streaming errors
-- **Graceful Degradation**: Surfaces streaming errors clearly and supports switching to non-streaming mode via config
-- **Buffer Management**: Intelligent chunk buffering and reconstruction for incomplete JSON
-- **Connection Stability**: Handles Gemini 500 Internal Server Errors with automatic retry
-
-### 📊 Improved Monitoring
-- **Detailed Error Classification**: Specific guidance for different types of Gemini API errors
-- **Enhanced Logging**: Comprehensive error tracking with malformed chunk statistics
-- **Real-time Status**: Better health checks and connection testing
+- **Antigravity OAuth (Google AI Pro)**: Use Claude Sonnet/Opus via Google OAuth.
+- **Claude Code Compatibility**: Works with Claude Code CLI and its tool-call format.
+- **Model Mapping**: Maps Claude Code aliases (`haiku`, `sonnet`, `opus`) to Antigravity model IDs.
+- **Streaming Support**: Handles streaming responses with retries for malformed chunks.
+- **Tool Use Translation**: Converts Claude tool calls to Antigravity function schemas.
+- **Token Counting**: `/v1/messages/count_tokens` endpoint compatible with Claude Code.
+- **Diagnostics**: `/health` and `/antigravity-status` for troubleshooting.
 
 ## Prerequisites
 
 - Python 3.8+.
 - Claude Code CLI installed (e.g., `npm install -g @anthropic-ai/claude-code`).
-- One of:
-  - Google AI Pro subscription (OAuth / Antigravity) for Claude Sonnet/Opus.
-  - Gemini API key (AI Studio) for the API-key path.
-- Optional: OpenCode CLI (`opencode`) for quick Antigravity verification.
-
-## Setup (API Key / Gemini AI Studio)
-
-If you are using the OAuth Quick Start above, you can skip this section.
-
-1.  **Clone the repository**:
-    ```bash
-    git clone <your-repo-url> # Or your fork
-    cd <repo-directory>
-    ```
-
-2.  **Create and activate a virtual environment** (recommended):
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate
-    ```
-
-3.  **Install dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    pip install -e . # Optional: install gclaude CLI
-    ```
-
-4.  **Configure Environment Variables**:
-    Copy the example environment file:
-    ```bash
-    cp .env.example .env
-    ```
-    Edit `.env` and add your Gemini API key. You can also customize model mappings and server settings:
-    ```dotenv
-    # Required: Your Google AI Studio API key
-    GEMINI_API_KEY="your-google-ai-studio-key"
-
-    # Optional: Model mappings for Claude Code aliases
-    BIG_MODEL="gemini-1.5-pro-latest"    # For 'sonnet' or 'opus' requests
-    SMALL_MODEL="gemini-1.5-flash-latest" # For 'haiku' requests
-    
-    # Optional: Server settings
-    HOST="0.0.0.0"
-    PORT="8082"
-    LOG_LEVEL="WARNING"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-    
-    # Optional: Performance and reliability settings
-    MAX_TOKENS_LIMIT="8192"           # Max tokens for Gemini responses
-    REQUEST_TIMEOUT="90"              # Request timeout in seconds
-    MAX_RETRIES="2"                   # LiteLLM retries to Gemini
-    MAX_STREAMING_RETRIES="12"         # Streaming-specific retry attempts
-    
-    # Optional: Streaming control (use if experiencing issues)
-    FORCE_DISABLE_STREAMING="false"     # Disable streaming globally
-    EMERGENCY_DISABLE_STREAMING="false" # Emergency streaming disable
-
-    # Optional: OAuth / Antigravity (only if running the proxy module directly)
-    USE_ANTIGRAVITY="true"
-    ANTIGRAVITY_HAIKU_MODEL="antigravity-gemini-3-flash"
-    ANTIGRAVITY_SONNET_MODEL="antigravity-claude-sonnet-4-5-thinking"
-    ANTIGRAVITY_OPUS_MODEL="antigravity-claude-opus-4-5-thinking"
-    ```
-
-5.  **Run the server**:
-    The proxy module includes a `main()` entry that starts the Uvicorn server:
-    ```bash
-    python -m gclaude.proxy.server
-    ```
-    For development with auto-reload (restarts when you save changes to the proxy module):
-    ```bash
-    uvicorn gclaude.proxy.server:app --host 0.0.0.0 --port 8082 --reload
-    ```
-    You can view all startup options, including configurable environment variables, by running:
-    ```bash
-    python -m gclaude.proxy.server --help
-    ```
+- Google AI Pro subscription (OAuth / Antigravity).
+- Optional: OpenCode CLI (`opencode`) for quick verification.
 
 ## Usage with Claude Code
 
-1.  **Start the Proxy Server**: Ensure the Gemini proxy server (this application) is running and bound to your configured port (default: `8082`).
+1. **Start the Proxy Server**: Ensure the proxy is running on your configured port (default: `8082`).
 
-2.  **Configure Claude Code to Use the Proxy**:
-    Choose one of the following:
+2. **Configure Claude Code to Use the Proxy**:
+   ```bash
+   claude --settings ~/.claude/antigravity-settings.json
+   # or:
+   anticlaude
+   ```
+   If Claude Code asks for a token, set `ANTHROPIC_AUTH_TOKEN` to any dummy value.
 
-    **OAuth (Antigravity)**
-    ```bash
-    claude --settings ~/.claude/antigravity-settings.json
-    # or:
-    anticlaude
-    ```
+3. **Quick non-interactive test**
+   ```bash
+   anticlaude -p --model sonnet "ping"
+   anticlaude -p --model opus "ping"
+   ```
 
-    **API key path**
-    ```bash
-    ANTHROPIC_BASE_URL=http://localhost:8082 claude
-    ```
-    Replace `localhost:8082` if your proxy is running on a different host or port.
-    If Claude Code asks for a token, set `ANTHROPIC_AUTH_TOKEN` to any dummy value.
+4. **Use `CLAUDE.md` for Better Tooling**
+   Copy `CLAUDE.md` into your project directory so Claude Code gets the proxy-specific tool guidance:
+   ```bash
+   cp /path/to/<repo-directory>/CLAUDE.md /your/project/directory/
+   ```
+   Start a new Claude Code session with:
+   ```
+   First read and process CLAUDE.md with intent. After understanding and agreeing to use the policies and practices outlined in the document, respond with YES
+   ```
 
-    **Quick non-interactive test**
-    ```bash
-    anticlaude -p --model sonnet "ping"
-    anticlaude -p --model opus "ping"
-    ```
+## How It Works
 
-3.  **Utilize `CLAUDE.md` for Optimal Gemini Performance (Crucial)**:
-    - This repository includes a `CLAUDE.md` file. This file contains specific instructions and best practices tailored to help **Gemini** effectively understand and respond to **Claude Code's** unique command structure, tool usage patterns, and desired output formats.
-    - **Copy `CLAUDE.md` into your project directory**:
-      ```bash
-      cp /path/to/<repo-directory>/CLAUDE.md /your/project/directory/
-      ```
-    - When starting a new conversation with Claude Code in that directory, begin with:
-      ```
-      First read and process CLAUDE.md with intent. After understanding and agreeing to use the policies and practices outlined in the document, respond with YES
-      ```
-    - This ensures Gemini receives important context and instructions for better assistance.
-  
-    - If Gemini still struggles, ask it to re-read `CLAUDE.md` and restart the session.
-
-## How It Works: Powering Claude Code with Gemini
-
-1.  **Claude Code Request**: You issue a command or prompt in the Claude Code CLI.
-2.  **Anthropic Format**: Claude Code sends an API request (in Anthropic's Messages API format) to the proxy server's address (`http://localhost:8082`).
-3.  **Proxy Translation (Anthropic to Gemini)**: The proxy server:
-    *   Receives the Anthropic-formatted request.
-    *   Validates it and maps any Claude model aliases (like `claude-3-sonnet...`) to the corresponding model specified in your `.env` (API key mode) or Antigravity config (OAuth mode).
-    *   Translates the message structure, content blocks, and tool definitions into a format LiteLLM can use with the Gemini API.
-4.  **Antigravity or Gemini**: The proxy sends the request to:
-    - **Antigravity (OAuth)** when `USE_ANTIGRAVITY=true`, or
-    - **Gemini (API key)** when `USE_ANTIGRAVITY=false` and `GEMINI_API_KEY` is set.
-    There is no automatic fallback between the two modes.
-5.  **Model Response**: The model processes the request and returns its response to the proxy.
-6.  **Proxy Translation (Gemini to Anthropic)**: The proxy server:
-    *   Receives the Gemini response from LiteLLM (this can be a stream of events or a complete JSON object).
-    *   Handles streaming errors and malformed chunks with intelligent recovery.
-    *   Converts Gemini's output (text, tool calls, stop reasons) back into the Anthropic Messages API format that Claude Code expects.
-7.  **Response to Claude Code**: The proxy sends the Anthropic-formatted response back to your Claude Code client, which then displays the result or performs the requested action.
+1. Claude Code sends Anthropic-format requests to the proxy (`http://localhost:8082`).
+2. The proxy maps Claude model aliases to Antigravity model IDs.
+3. Requests are translated to the Antigravity API format and sent with OAuth.
+4. Responses are converted back to Anthropic format and returned to Claude Code.
 
 ## Model Mapping for Claude Code
 
-To ensure Claude Code's model requests are handled correctly:
+Model aliases map to Antigravity models:
+- `ANTIGRAVITY_HAIKU_MODEL` (default: `antigravity-gemini-3-flash`)
+- `ANTIGRAVITY_SONNET_MODEL` (default: `antigravity-claude-sonnet-4-5-thinking`)
+- `ANTIGRAVITY_OPUS_MODEL` (default: `antigravity-claude-opus-4-5-thinking`)
 
-- **OAuth (Antigravity)**: When `USE_ANTIGRAVITY=true`, model aliases map to:
-  - `ANTIGRAVITY_HAIKU_MODEL` (default: `antigravity-gemini-3-flash`)
-  - `ANTIGRAVITY_SONNET_MODEL` (default: `antigravity-claude-sonnet-4-5-thinking`)
-  - `ANTIGRAVITY_OPUS_MODEL` (default: `antigravity-claude-opus-4-5-thinking`)
-- **API key (Gemini)**: When `USE_ANTIGRAVITY=false`, model aliases map to:
-  - `SMALL_MODEL` for haiku (default: `gemini-1.5-flash-latest`)
-  - `BIG_MODEL` for sonnet/opus (default: `gemini-1.5-pro-latest`)
-- If Claude Code requests a full Gemini model name (e.g., `gemini/gemini-1.5-pro-latest`), the proxy will use that directly.
-
-The server maintains a list of known Gemini models. If a recognized Gemini model is requested by the client without the `gemini/` prefix, the proxy will add it.
+If Claude Code requests a full `antigravity-*` model ID, the proxy will use it directly.
 
 ## Endpoints
 
-- `POST /v1/messages`: The primary endpoint for Claude Code to send messages to Gemini. It's fully compatible with the Anthropic Messages API specification that Claude Code uses.
-- `POST /v1/messages/count_tokens`: Allows Claude Code to estimate the token count for a set of messages, using Gemini's tokenization.
-- `GET /health`: Returns health status, streaming settings, API key configuration, and Antigravity status when enabled.
-- `GET /antigravity-status`: Returns Antigravity OAuth status and quota info (when enabled).
-- `GET /test-connection`: Performs a quick API call to Gemini to verify connectivity and that your `GEMINI_API_KEY` is working (API key mode only).
-- `GET /`: Root endpoint providing a welcome message, current configuration summary (models, limits), and available endpoints.
+- `POST /v1/messages`: Claude Code messages endpoint.
+- `POST /v1/messages/count_tokens`: Token count estimation using local model metadata.
+- `GET /health`: Health status, streaming settings, and Antigravity status.
+- `GET /antigravity-status`: OAuth account + quota status.
+- `GET /`: Root endpoint with configuration summary.
 
 ## Error Handling & Troubleshooting
 
-### Common Issues and Solutions
-
 **Streaming Errors (malformed chunks):**
-- The proxy automatically handles malformed JSON chunks from Gemini
-- If streaming becomes unstable, set `FORCE_DISABLE_STREAMING=true` as a temporary fix
-- Increase `MAX_STREAMING_RETRIES` for more resilient streaming
-
-**Gemini 500 Internal Server Errors:**
-- The proxy automatically retries with exponential backoff
-- These are temporary Gemini API issues that resolve automatically
-- Check `/health` endpoint to monitor API status
+- The proxy retries malformed chunk parsing automatically.
+- Set `FORCE_DISABLE_STREAMING=true` if you need a temporary fallback.
 
 **Connection Timeouts:**
-- Increase `REQUEST_TIMEOUT` if experiencing frequent timeouts
-- Check your internet connection and firewall settings
-- Use `/test-connection` endpoint to verify API connectivity
+- Increase `REQUEST_TIMEOUT` if you see frequent timeouts.
+- Check network connectivity and firewall settings.
 
 **Rate Limiting:**
-- For API key mode: monitor your Google AI Studio quota in the Google Cloud Console
-- For OAuth mode: check `python -m gclaude status` or `/antigravity-status`
-- The proxy will provide specific rate limit guidance in error messages
+- Check `python -m gclaude status` or `/antigravity-status` for quota info.
 
 **Antigravity OAuth Issues:**
-- Re-run `python -m gclaude init` if you see auth or token errors
-- Confirm `USE_ANTIGRAVITY=true` and the `ANTIGRAVITY_*` model IDs
-
-### Emergency Mode
-
-If you experience persistent issues:
-```bash
-# Disable streaming temporarily
-export EMERGENCY_DISABLE_STREAMING=true
-
-# Or force disable all streaming
-export FORCE_DISABLE_STREAMING=true
-```
+- Re-run `python -m gclaude init` if you see auth or token errors.
 
 ## Logging
 
-The server provides detailed logs, which are especially useful for understanding how Claude Code requests are translated for Gemini and for monitoring error recovery. Logs are colorized in TTY environments for easier reading. Adjust verbosity with the `LOG_LEVEL` environment variable:
-
-- `DEBUG`: Detailed request/response logging and error recovery steps
+Logs show request routing, retries, and conversion details. Adjust verbosity with `LOG_LEVEL`:
+- `DEBUG`: Detailed request/response logging
 - `INFO`: General operation logging
-- `WARNING`: Error recovery and streaming recovery notifications (recommended)
+- `WARNING`: Error recovery notifications (recommended)
 - `ERROR`: Only errors and failures
-- `CRITICAL`: Only critical failures
-
-## The `CLAUDE.md` File: Guiding Gemini for Claude Code
-
-The `CLAUDE.md` file included in this repository is critical for achieving the best experience when using this proxy with Claude Code and Gemini.
-
-**Purpose:**
-
-- **Tailors Gemini to Claude Code's Needs**: Claude Code has specific ways it expects an LLM to behave, especially regarding tool use, file operations, and output formatting. `CLAUDE.md` provides Gemini with explicit instructions on these expectations.
-- **Improves Tool Reliability**: By outlining how tools should be called and results interpreted, it helps Gemini make more effective use of Claude Code's capabilities.
-- **Enhances Code Generation & Understanding**: Gives Gemini context about the development environment and coding standards, leading to better code suggestions within Claude Code.
-- **Reduces Misinterpretations**: Helps bridge any gaps between how Anthropic models might interpret Claude Code directives versus how Gemini might.
-
-**How Claude Code Uses It:**
-
-When you run `claude` in a project directory, the Claude Code CLI automatically looks for a `CLAUDE.md` file in that directory. If found, its contents are prepended to the system prompt for every request sent to the LLM (in this case, your Gemini proxy).
-
-**Recommendation:** Always copy the `CLAUDE.md` from this proxy's repository into the root of any project where you intend to use Claude Code with this Gemini proxy. This ensures Gemini receives these vital instructions for every session.
 
 ## Performance Tips
 
-- **Model Selection**: For API key mode, use `gemini-1.5-flash-latest` for faster responses and `gemini-1.5-pro-latest` for more complex tasks
-- **Model Selection (OAuth)**: Use `ANTIGRAVITY_*` model IDs (e.g., `antigravity-claude-sonnet-4-5-thinking`) for Antigravity mode
-- **Streaming**: Keep streaming enabled for better interactivity; the proxy handles errors automatically
-- **Timeouts**: Increase `REQUEST_TIMEOUT` for complex requests that need more processing time
-- **Retries**: Adjust `MAX_STREAMING_RETRIES` based on your network stability
+- Use `ANTIGRAVITY_*` model IDs that match your access.
+- Keep streaming enabled for interactive output; the proxy handles retries.
+- Increase `REQUEST_TIMEOUT` for large requests.
+- Adjust `MAX_STREAMING_RETRIES` for unstable networks.
 
 ## Contributing
 
-Contributions, issues, and feature requests are welcome! Please submit them on the GitHub repository.
+Contributions, issues, and feature requests are welcome.
 
 Areas where contributions are especially valuable:
-- Additional Gemini model support
-- Performance optimizations
-- Enhanced error recovery strategies
+- Antigravity model routing improvements
+- Error recovery strategies
 - Documentation improvements
-
-## Additional Documentation
-
-- **[ANTIGRAVITY.md](ANTIGRAVITY.md)** - Detailed guide to Antigravity OAuth setup and configuration
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Architecture overview and file structure
-- **[CLAUDE.md](CLAUDE.md)** - Best practices for Claude Code with Gemini
-
-## Thanks
-
-This project was heavily inspired by and builds upon the foundational work of the [claude-code-proxy by @1rgs](https://github.com/1rgs/claude-code-proxy). Their original proxy was instrumental in demonstrating the viability of such a bridge.
-
-Special thanks to the community for testing and feedback on error handling improvements.
 
 ---
 
 ## gclaude CLI
 
-`gclaude` is the OAuth/Antigravity-focused CLI. If you only want API key mode, use `.env` + `python -m gclaude.proxy.server` instead.
-
 ### Installation
-
-After installing the package dependencies:
 
 ```bash
 pip install -e .
@@ -403,7 +220,7 @@ python -m gclaude logs -f
 
 **OAuth Management:** Add, remove, and list Antigravity OAuth accounts.
 
-**Status Dashboard:** Beautiful terminal UI showing proxy status, auth state, and model routes.
+**Status Dashboard:** Terminal UI showing proxy status, auth state, and model routes.
 
 ### Configuration Files
 
@@ -414,10 +231,6 @@ python -m gclaude logs -f
 | Logs | `~/.gclaude/logs/proxy.log` |
 
 ### Model Routes
-
-#### Antigravity Models (Google OAuth, Higher Quota)
-
-When authenticated with Antigravity, gclaude routes requests to higher-quota endpoints:
 
 | Claude Code Pattern | Antigravity Model | Description |
 |---------------------|-------------------|-------------|
@@ -436,18 +249,6 @@ When authenticated with Antigravity, gclaude routes requests to higher-quota end
 | `antigravity-claude-opus-4-5-thinking` | Claude Opus 4.5 (Thinking) | Advanced reasoning - Best for opus requests |
 | `antigravity-gpt-oss-120b-medium` | GPT-OSS 120B Medium | Open source alternative - Medium capability |
 
-#### Gemini API Models (API Key, Standard Quota)
-
-Used when running API key mode (`USE_ANTIGRAVITY=false` with `GEMINI_API_KEY` set). There is no automatic fallback between OAuth and API key modes.
-
-| Model ID | Name | Description |
-|----------|------|-------------|
-| `gemini-2.0-flash-exp` | Gemini 2.0 Flash Exp | Experimental - Very Fast |
-| `gemini-2.5-flash-preview-04-17` | Gemini 2.5 Flash Preview | Latest Flash Model |
-| `gemini-2.5-pro-preview` | Gemini 2.5 Pro Preview | Latest Pro Model |
-| `gemini-1.5-flash-latest` | Gemini 1.5 Flash | Stable Fast Model |
-| `gemini-1.5-pro-latest` | Gemini 1.5 Pro | Stable Capable Model |
-
 ### Architecture Overview
 
 ```
@@ -455,18 +256,9 @@ Used when running API key mode (`USE_ANTIGRAVITY=false` with `GEMINI_API_KEY` se
 │  Claude Code    │────▶│  gclaude Proxy   │────▶│  Antigravity API        │
 │  (claude cli)   │     │  (localhost:8082)│     │  (Google OAuth)         │
 └─────────────────┘     └──────────────────┘     └─────────────────────────┘
-                                │
-                                │ API key mode (USE_ANTIGRAVITY=false)
-                                ▼
-                       ┌──────────────────┐     ┌─────────────────────────┐
-                       │  Gemini API      │────▶│  Gemini 1.5/2.0 Models  │
-                       │  (API Key)       │     └─────────────────────────┘
-                       └──────────────────┘
 ```
 
 **Request Flow:**
-1. Claude Code sends Anthropic-format request to `http://localhost:8082`
-2. Proxy translates to Antigravity/Gemini format
-3. If `USE_ANTIGRAVITY=true`: routes to Antigravity API (OAuth)
-4. If `USE_ANTIGRAVITY=false`: routes to Gemini API (requires `GEMINI_API_KEY`)
-5. Response translated back to Anthropic format for Claude Code (no automatic fallback between modes)
+1. Claude Code sends Anthropic-format requests to `http://localhost:8082`
+2. Proxy translates to Antigravity format and routes via OAuth
+3. Responses are translated back to Anthropic format for Claude Code

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 # Autopush sandbox quota - secondary Antigravity bucket
 AUTOPUSH_ENDPOINT = "https://autopush-cloudcode-pa.sandbox.googleapis.com"
-# Production quota (also used by Gemini CLI fallback)
+# Production quota endpoint
 GEMINI_CLI_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 
 # Combined endpoint list for Antigravity fallback (ordered by preference)
@@ -47,7 +47,7 @@ GEMINI_CLI_HEADERS = {
 }
 
 # Model name transformations for quota fallback
-# Antigravity uses tier suffixes (-low/-high), Gemini CLI uses -preview
+# Antigravity uses tier suffixes (-low/-high); production uses -preview
 MODEL_ANTIGRAVITY_TO_CLI = {
     "gemini-3-pro-low": "gemini-3-pro-preview",
     "gemini-3-pro-high": "gemini-3-pro-preview",
@@ -64,12 +64,13 @@ CLAUDE_THINKING_DEFAULT_BUDGET = 32768
 CLAUDE_THINKING_MAX_OUTPUT_TOKENS = 64000
 ANTIGRAVITY_INCLUDE_THOUGHTS = os.getenv("ANTIGRAVITY_INCLUDE_THOUGHTS", "false").lower() == "true"
 
-# Cache tool call context so tool results can be described to Gemini.
+# Cache tool call context so tool results can be described to the provider.
 TOOL_THOUGHT_SIGNATURES: Dict[str, str] = {}
 TOOL_CALL_CONTEXT: Dict[str, Dict[str, Any]] = {}
 LAST_THOUGHT_SIGNATURE: Optional[str] = None
 LAST_USER_TEXT: str = ""
 LAST_USER_URLS: List[str] = []
+LAST_USER_PATHS: List[str] = []
 
 
 def _extract_urls(text: str) -> List[str]:
@@ -91,6 +92,31 @@ def _extract_urls(text: str) -> List[str]:
     return urls
 
 
+def _extract_paths(text: str) -> List[str]:
+    if not isinstance(text, str) or not text:
+        return []
+    candidates: List[str] = []
+    # Absolute or home-relative paths.
+    for match in re.findall(r"(?:~/?|/)[A-Za-z0-9._/-]+", text):
+        if match.startswith("http"):
+            continue
+        candidates.append(match)
+    # Relative file paths with extensions.
+    for match in re.findall(r"\\b[\\w./-]+\\.[A-Za-z0-9]{1,6}\\b", text):
+        if match.startswith("http"):
+            continue
+        candidates.append(match)
+    # Preserve order while de-duping.
+    seen = set()
+    ordered: List[str] = []
+    for item in candidates:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
+
+
 def _extract_text_from_content(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -109,7 +135,7 @@ def _extract_text_from_content(content: Any) -> str:
 
 
 def _update_last_user_context(messages: List[Dict[str, Any]]) -> None:
-    global LAST_USER_TEXT, LAST_USER_URLS
+    global LAST_USER_TEXT, LAST_USER_URLS, LAST_USER_PATHS
     last_text = ""
     for msg in messages:
         if msg.get("role") == "user":
@@ -118,6 +144,7 @@ def _update_last_user_context(messages: List[Dict[str, Any]]) -> None:
                 last_text = text
     LAST_USER_TEXT = last_text
     LAST_USER_URLS = _extract_urls(last_text)
+    LAST_USER_PATHS = _extract_paths(last_text)
 
 
 def _is_license_error(error_msg: str) -> bool:
@@ -260,7 +287,7 @@ class AntigravityClient:
         return model
 
     def can_use_cli_fallback(self, model: str) -> bool:
-        """Check if a model can fall back to Gemini CLI quota.
+        """Check if a model can fall back to production quota.
 
         Claude models only exist on Antigravity, so they cannot fall back.
         """
@@ -407,7 +434,7 @@ class AntigravityClient:
         self, model: str, messages: List[Dict[str, Any]], **kwargs
     ) -> Dict[str, Any]:
         """
-        Generate content using Antigravity's Gemini API.
+        Generate content using the Antigravity API.
 
         Args:
             model: The Antigravity model name
@@ -419,13 +446,18 @@ class AntigravityClient:
         """
         _update_last_user_context(messages)
 
-        # Convert messages to Gemini format
+        # Convert messages to Antigravity format
         contents = []
         system_texts: List[str] = []
         api_model = get_api_model_name(model)
         is_claude_thinking = is_claude_thinking_model(api_model)
 
         tool_responses = [m for m in messages if m.get("role") == "tool"]
+        if tool_responses:
+            logger.debug(
+                "Tool responses available: %s",
+                [r.get("tool_call_id") for r in tool_responses if r.get("tool_call_id")],
+            )
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -441,7 +473,7 @@ class AntigravityClient:
                     system_texts.append(str(content))
                 continue
 
-            # Convert role to Gemini format
+            # Convert role to Antigravity format
             if role == "assistant":
                 gemini_role = "model"
             else:
@@ -530,6 +562,12 @@ class AntigravityClient:
                         )
                         continue
                     result_content = response.get("content", "")
+                    logger.debug(
+                        "Tool response matched: id=%s name=%s type=%s",
+                        tool_id,
+                        tool_name,
+                        type(result_content).__name__,
+                    )
                     function_responses.append(
                         {
                             "functionResponse": {
@@ -634,7 +672,7 @@ class AntigravityClient:
 
         # Dual-quota system with intelligent fallback
         # 1. Try Antigravity quota (daily endpoint) first
-        # 2. If rate limited and model supports it, try Gemini CLI quota (prod endpoint)
+        # 2. If rate limited and model supports it, try production quota (prod endpoint)
         # 3. Exponential backoff retry if all quotas exhausted
 
         path = "/v1internal:generateContent"
@@ -650,7 +688,7 @@ class AntigravityClient:
             (endpoint, "antigravity", api_model) for endpoint in ANTIGRAVITY_ENDPOINTS
         ]
 
-        # OAuth-only: disable Gemini CLI fallback to avoid 401s in Claude Code.
+        # OAuth-only: disable production fallback to avoid 401s in Claude Code.
 
         # Try each quota strategy with exponential backoff
         max_retries = 3
@@ -707,7 +745,7 @@ class AntigravityClient:
         self, model: str, messages: List[Dict[str, Any]], **kwargs
     ) -> AsyncIterator[Dict[str, Any]]:
         """
-        Generate content with streaming using Antigravity's Gemini API.
+        Generate content with streaming using the Antigravity API.
 
         Args:
             model: The Antigravity model name
@@ -719,7 +757,7 @@ class AntigravityClient:
         """
         _update_last_user_context(messages)
 
-        # Convert messages to Gemini format (same as non-streaming)
+        # Convert messages to Antigravity format (same as non-streaming)
         contents = []
         system_texts: List[str] = []
 
@@ -727,6 +765,11 @@ class AntigravityClient:
         is_claude_thinking = is_claude_thinking_model(api_model)
 
         tool_responses = [m for m in messages if m.get("role") == "tool"]
+        if tool_responses:
+            logger.debug(
+                "Tool responses available: %s",
+                [r.get("tool_call_id") for r in tool_responses if r.get("tool_call_id")],
+            )
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -825,6 +868,12 @@ class AntigravityClient:
                         )
                         continue
                     result_content = response.get("content", "")
+                    logger.debug(
+                        "Tool response matched: id=%s name=%s type=%s",
+                        tool_id,
+                        tool_name,
+                        type(result_content).__name__,
+                    )
                     function_responses.append(
                         {
                             "functionResponse": {
@@ -929,7 +978,7 @@ class AntigravityClient:
         quota_strategies = [
             (endpoint, "antigravity", api_model) for endpoint in ANTIGRAVITY_ENDPOINTS
         ]
-        # OAuth-only: disable Gemini CLI fallback to avoid 401s in Claude Code.
+        # OAuth-only: disable production fallback to avoid 401s in Claude Code.
 
         # Try each quota strategy with retries
         max_retries = 3
@@ -1258,6 +1307,7 @@ def _coerce_tool_args(
 
     user_text = LAST_USER_TEXT.strip() if isinstance(LAST_USER_TEXT, str) else ""
     user_urls = LAST_USER_URLS if isinstance(LAST_USER_URLS, list) else []
+    user_paths = LAST_USER_PATHS if isinstance(LAST_USER_PATHS, list) else []
 
     for key in required:
         if key in coerced and coerced[key] not in ("", None):
@@ -1269,18 +1319,28 @@ def _coerce_tool_args(
             if isinstance(key, str):
                 lower_key = key.lower()
                 if lower_key in {"path", "file", "filepath", "file_path", "directory", "dir"}:
-                    default_value = "."
+                    if user_paths:
+                        default_value = user_paths[0]
+                    else:
+                        default_value = "."
                 elif lower_key in {"paths", "files"}:
                     default_value = ["."]
                 elif lower_key in {"url", "page_url", "pageurl", "link"} and user_urls:
                     default_value = user_urls[0]
                 elif lower_key in {"query", "prompt", "text", "instruction"} and user_text:
                     default_value = user_text
+                elif lower_key in {"todos", "todo", "items"}:
+                    default_value = []
         elif isinstance(default_value, str) and not default_value:
             # Prefer user context over empty defaults for text/url fields.
             if isinstance(key, str):
                 lower_key = key.lower()
-                if lower_key in {"url", "page_url", "pageurl", "link"} and user_urls:
+                if lower_key in {"path", "file", "filepath", "file_path", "directory", "dir"}:
+                    if user_paths:
+                        default_value = user_paths[0]
+                    else:
+                        default_value = "."
+                elif lower_key in {"url", "page_url", "pageurl", "link"} and user_urls:
                     default_value = user_urls[0]
                 elif lower_key in {"query", "prompt", "text", "instruction"} and user_text:
                     default_value = user_text
@@ -1294,10 +1354,10 @@ def convert_gemini_to_anthropic_format(
     gemini_response: Dict[str, Any], tool_schemas: Optional[Dict[str, Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     """
-    Convert Gemini API response to Anthropic API format.
+    Convert Antigravity API response to Anthropic API format.
 
     Args:
-        gemini_response: Raw Gemini API response (may be wrapped in {"response": {...}})
+        gemini_response: Raw Antigravity API response (may be wrapped in {"response": {...}})
 
     Returns:
         dict: Anthropic-formatted response
@@ -1325,7 +1385,7 @@ def convert_gemini_to_anthropic_format(
     finish_reason = "end_turn"
 
     def extract_thinking_text(part: Dict[str, Any]) -> Optional[str]:
-        """Extract thinking content from a Gemini part, if present."""
+        """Extract thinking content from a provider part, if present."""
         if "thought" in part:
             thought = part.get("thought")
             if isinstance(thought, str):
@@ -1494,10 +1554,10 @@ async def convert_gemini_stream_to_anthropic_format(
     tool_schemas: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> AsyncIterator[str]:
     """
-    Convert Gemini SSE stream to Anthropic SSE format.
+    Convert Antigravity SSE stream to Anthropic SSE format.
 
     Args:
-        stream_generator: Gemini SSE stream
+        stream_generator: Antigravity SSE stream
         original_model: Original requested model name
 
     Yields:
@@ -1525,7 +1585,7 @@ async def convert_gemini_stream_to_anthropic_format(
 
     try:
         def extract_thinking_text(part: Dict[str, Any]) -> Optional[str]:
-            """Extract thinking content from a Gemini part, if present."""
+            """Extract thinking content from a provider part, if present."""
             if "thought" in part:
                 thought = part.get("thought")
                 if isinstance(thought, str):
@@ -1726,19 +1786,19 @@ async def convert_gemini_stream_to_anthropic_format(
                     )
                     if isinstance(tool_schemas, dict) and func_name not in tool_schemas:
                         continue
-                    if func_name:
-                        logger.info(
-                            "Antigravity stream tool_call: %s (args: %s)",
-                            func_name,
-                            json.dumps(func_args)[:300] if isinstance(func_args, dict) else "",
-                        )
-
                     raw_tool_id = func_call.get("id")
                     tool_id = (
                         raw_tool_id
                         if isinstance(raw_tool_id, str) and raw_tool_id
                         else f"toolu_{uuid.uuid4().hex[:24]}"
                     )
+                    if func_name:
+                        logger.info(
+                            "Antigravity stream tool_call: %s (id=%s args: %s)",
+                            func_name,
+                            tool_id,
+                            json.dumps(func_args)[:300] if isinstance(func_args, dict) else "",
+                        )
                     existing = next(
                         (tc for tc in tool_calls if tc.get("id") == tool_id),
                         None,
@@ -1789,13 +1849,16 @@ async def convert_gemini_stream_to_anthropic_format(
     if current_block_type is not None:
         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_block_index})}\n\n"
 
-    # Send any tool calls
+    # Send any tool calls (stream input JSON via input_json_delta)
     for tool_call in tool_calls:
         tool_index = current_block_index + 1
         thought_signature = tool_call.get("thought_signature")
         if thought_signature:
             TOOL_THOUGHT_SIGNATURES[tool_call["id"]] = thought_signature
-        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': tool_index, 'content_block': {'type': 'tool_use', 'id': tool_call['id'], 'name': tool_call['name'], 'input': tool_call['args']}})}\n\n"
+        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': tool_index, 'content_block': {'type': 'tool_use', 'id': tool_call['id'], 'name': tool_call['name'], 'input': {}}})}\n\n"
+        tool_args = tool_call.get("args", {})
+        partial_json = json.dumps(tool_args if isinstance(tool_args, dict) else tool_args)
+        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': tool_index, 'delta': {'type': 'input_json_delta', 'partial_json': partial_json}})}\n\n"
         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': tool_index})}\n\n"
         current_block_index = tool_index
 

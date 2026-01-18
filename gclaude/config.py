@@ -37,7 +37,6 @@ class Config:
                 "account_email": None,
             },
             "models": get_default_models(),
-            "fallback_api_key": None,
         }
 
         for key, value in defaults.items():
@@ -120,14 +119,6 @@ class Config:
             "type": type,
         }
 
-    @property
-    def fallback_api_key(self) -> Optional[str]:
-        return self._config.get("fallback_api_key")
-
-    @fallback_api_key.setter
-    def fallback_api_key(self, value: Optional[str]) -> None:
-        self._config["fallback_api_key"] = value
-
     def is_configured(self) -> bool:
         """Check if the proxy is configured."""
         return self._config.get("models") is not None
@@ -148,7 +139,7 @@ class Config:
         for name, config in models.items():
             pattern = config.get("pattern", "")
             target = config.get("target")
-            model_type = config.get("type", "gemini")
+            model_type = config.get("type", "antigravity")
             if fnmatch.fnmatch(model_name.lower(), pattern.lower()):
                 return target, model_type
         return None
@@ -157,17 +148,3 @@ class Config:
         """Return config as dictionary."""
         return self._config.copy()
 
-
-def import_env_api_key() -> Optional[str]:
-    """Import GEMINI_API_KEY from existing .env file."""
-    env_path = Path.cwd() / ".env"
-    if not env_path.exists():
-        # Also check in the gclaude directory
-        env_path = Path(__file__).parent.parent / ".env"
-
-    if env_path.exists():
-        from dotenv import load_dotenv
-        load_dotenv(env_path)
-        import os
-        return os.environ.get("GEMINI_API_KEY")
-    return None

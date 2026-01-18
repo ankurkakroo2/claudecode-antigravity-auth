@@ -4,7 +4,7 @@ This document describes the architecture and file structure of the gclaude packa
 
 ## Purpose
 
-**gclaude** is a Python package that provides a CLI tool for running a proxy server that translates Claude Code API requests to Antigravity/Gemini models.
+**gclaude** is a Python package that provides a CLI tool for running a proxy server that translates Claude Code API requests to Antigravity models (OAuth).
 
 ## File Structure
 
@@ -18,7 +18,7 @@ gclaude/
 ├── auth.py               # Rich UI for OAuth authentication
 ├── utils.py              # Utility functions
 └── proxy/                # Proxy implementation modules
-    ├── server.py         # FastAPI app (Claude ↔ Antigravity/Gemini)
+    ├── server.py         # FastAPI app (Claude ↔ Antigravity)
     ├── antigravity_client.py # Antigravity API client
     ├── antigravity_auth.py   # OAuth 2.0 with PKCE implementation
     └── quota_manager.py      # Quota/rate-limit management
@@ -50,9 +50,6 @@ Provides the `gclaude` command with subcommands:
 | `auth` | Manage OAuth accounts |
 | `config` | View configuration |
 
-**Key classes**:
-- None (uses click decorators)
-
 **Dependencies**:
 - `click` - CLI framework
 - `rich` - Terminal UI
@@ -73,16 +70,20 @@ Manages the gclaude configuration file.
 ```json
 {
   "version": "1.0.0",
-  "proxy_host": "127.0.0.1",
-  "proxy_port": 8082,
-  "auth_enabled": true,
-  "account_email": "user@gmail.com",
-  "models": {
-    "haiku": {"pattern": "*haiku*", "target": "...", "type": "..."},
-    "sonnet": {"pattern": "*sonnet*", "target": "...", "type": "..."},
-    "opus": {"pattern": "*opus*", "target": "...", "type": "..."}
+  "proxy": {
+    "host": "127.0.0.1",
+    "port": 8082,
+    "log_level": "INFO"
   },
-  "fallback_api_key": "AIzaSy..."
+  "auth": {
+    "enabled": true,
+    "account_email": "user@gmail.com"
+  },
+  "models": {
+    "haiku": {"pattern": "*haiku*", "target": "...", "type": "antigravity"},
+    "sonnet": {"pattern": "*sonnet*", "target": "...", "type": "antigravity"},
+    "opus": {"pattern": "*opus*", "target": "...", "type": "antigravity"}
+  }
 }
 ```
 
@@ -95,20 +96,19 @@ Manages the proxy server process (start/stop/status).
 
 ### `gclaude/proxy/server.py` - Proxy Server
 
-Implements the FastAPI server that translates between Claude Code and Antigravity/Gemini APIs.
-
-**Key classes**:
-- None (FastAPI app module with global `app`)
+Implements the FastAPI server that translates between Claude Code and Antigravity APIs.
 
 **Endpoints**:
 - `POST /v1/messages` - Main Claude Code API endpoint
+- `POST /v1/messages/count_tokens` - Token counting endpoint
 - `GET /health` - Health check
+- `GET /antigravity-status` - OAuth status + quota
 - `GET /` - Root/info endpoint
 
 **Request flow**:
 1. Receive Anthropic-format request from Claude Code
 2. Match model pattern to configured target
-3. Translate to Antigravity/Gemini format
+3. Translate to Antigravity format
 4. Call backend API
 5. Translate response back to Anthropic format
 6. Return to Claude Code
@@ -148,19 +148,6 @@ Implements OAuth 2.0 with PKCE for Google authentication.
 **Key classes**:
 - `AntigravityAuthManager` - Manage OAuth accounts and tokens
 
-**Key functions**:
-- `generate_pkce_verifier_and_challenge()` - PKCE pair generation
-- `exchange_code_for_tokens()` - Exchange auth code for tokens
-- `refresh_access_token()` - Refresh expired access token
-- `get_valid_access_token()` - Get valid token (refresh if needed)
-
-**Constants**:
-- `ANTIGRAVITY_CLIENT_ID` - Default from NoeFabris project
-- `ANTIGRAVITY_CLIENT_SECRET` - Default from NoeFabris project
-- `ANTIGRAVITY_REDIRECT_URI` - `http://localhost:51121/oauth-callback`
-- `ANTIGRAVITY_SCOPES` - Required OAuth scopes
-- `ACCOUNTS_PATH` - `~/.config/gclaude/antigravity-accounts.json`
-
 ### `proxy/antigravity_client.py` - API Client
 
 Client for calling the Antigravity API.
@@ -193,7 +180,6 @@ General utility functions.
 - `is_proxy_running()` - Check if proxy is running
 - `get_default_models()` - Get default model mappings
 - `get_available_antigravity_models()` - List all Antigravity models
-- `get_available_gemini_models()` - List fallback Gemini models
 
 ## Request Flow Diagram
 
@@ -213,23 +199,14 @@ General utility functions.
                                   └──────────────┼──────────────┘
                                                  ▼
                                     ┌───────────────────────┐
-                                    │ Check Auth Status     │
+                                    │ Antigravity OAuth     │
                                     │ (access_token valid?) │
                                     └───────────┬───────────┘
                                                 │
-                                    ┌───────────┴───────────┐
-                                    ▼                       ▼
-                             ┌─────────────┐         ┌─────────────┐
-                             │ Authenticated│        │ Not Auth    │
-                             │ Antigravity │         │ Gemini API  │
-                             │ API         │         │ Key Fallback│
-                             └──────┬──────┘         └──────┬──────┘
-                                    │                      │
-                                    └──────────┬───────────┘
-                                               ▼
+                                                ▼
                                     ┌───────────────────────┐
                                     │ Translate Response    │
-                                    │ Gemini → Anthropic    │
+                                    │ Antigravity → Anthropic│
                                     └───────────┬───────────┘
                                                 ▼
                                     ┌───────────────────────┐
@@ -252,17 +229,3 @@ litellm>=1.40.0       # LLM abstraction
 python-dotenv>=1.0.0  # Environment variables
 psutil>=5.9.0         # Process utilities
 ```
-
-## Shell Integration
-
-The `anticlaude` function in `.zshrc` provides one-command access:
-
-```bash
-anticlaude  # Starts Claude Code with proxy
-```
-
-This function:
-1. Waits for proxy to be healthy
-2. Creates session marker file
-3. Launches `claude` with `--settings ~/.claude/antigravity-settings.json`
-4. Cleans up marker on exit

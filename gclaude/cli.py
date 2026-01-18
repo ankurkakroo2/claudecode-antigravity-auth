@@ -17,14 +17,13 @@ from rich.panel import Panel
 from rich import print as rprint
 from rich.json import JSON
 
-from gclaude.config import Config, import_env_api_key
+from gclaude.config import Config
 from gclaude.server import ProxyServer, show_status_rich
 from gclaude.utils import (
     get_config_dir,
     get_config_path,
     get_shell_rc_path,
     get_available_antigravity_models,
-    get_available_gemini_models,
 )
 
 console = Console()
@@ -33,7 +32,7 @@ console = Console()
 @click.group()
 @click.version_option(version="1.0.0", prog_name="gclaude")
 def cli():
-    """gclaude - Gemini → Claude Code Proxy with Antigravity OAuth"""
+    """gclaude - Antigravity OAuth proxy for Claude Code"""
     pass
 
 
@@ -49,7 +48,7 @@ def init():
         Panel.fit(
             """[bold cyan]🚀 Welcome to gclaude[/bold cyan]
 
-[bold cyan]Gemini → Claude Code Proxy with Antigravity OAuth[/bold cyan]
+[bold cyan]Antigravity OAuth proxy for Claude Code[/bold cyan]
 
 This will guide you through:
   ✓ Authenticating with Google OAuth
@@ -68,19 +67,6 @@ This will guide you through:
         if not Confirm.ask("Configuration already exists. Overwrite?", default=False):
             console.print("[dim]Setup cancelled.[/dim]")
             return
-
-    # Import API key from existing .env if available
-    if not config.fallback_api_key:
-        console.print("[dim]Looking for GEMINI_API_KEY in .env file...[/dim]")
-        api_key = import_env_api_key()
-        if api_key:
-            config.fallback_api_key = api_key
-            console.print("[green]✓ Found GEMINI_API_KEY[/green]")
-        else:
-            console.print("[yellow]⚠ No GEMINI_API_KEY found in .env[/yellow]")
-            api_key = questionary.password("Enter your Gemini API key (or skip):").ask()
-            if api_key:
-                config.fallback_api_key = api_key
 
     console.print()
 
@@ -244,7 +230,7 @@ This will guide you through:
 
         if result:
             # Determine type
-            model_type = "antigravity" if "antigravity" in result else "gemini"
+            model_type = "antigravity"
             config.set_model_mapping(name, f"*{name}*", result, model_type)
             console.print(f"[green]✓ {name} → {result}[/green]")
         else:
@@ -272,7 +258,7 @@ This will guide you through:
         if target == "skipped":
             console.print(f"  • {name}: [dim]skipped[/dim]")
         else:
-            model_type = mapping.get("type", "gemini")
+            model_type = mapping.get("type", "antigravity")
             type_color = "cyan" if model_type == "antigravity" else "blue"
             console.print(f"  • {name} → [{type_color}]{target}[/{type_color}]")
     console.print()
@@ -546,9 +532,6 @@ def config():
     config_dict = config.to_dict()
 
     # Mask sensitive values
-    if config_dict.get("fallback_api_key"):
-        key = config_dict["fallback_api_key"]
-        config_dict["fallback_api_key"] = key[:8] + "..." if len(key) > 8 else "***"
 
     console.print()
     console.print(

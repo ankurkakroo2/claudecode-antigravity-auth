@@ -1,209 +1,93 @@
-# Plan: Antigravity Integration - Current Status & Next Steps
+# Plan: Antigravity-Only Proxy
 
-## Current Status (Updated: 2026-01-16)
+## Current Status (Updated: 2026-01-18)
 
 **What Works:**
 - ✅ OAuth authentication with Google OAuth 2.0
-- ✅ Model detection working - detects 7 Antigravity models
+- ✅ Model detection for Antigravity models
 - ✅ CLI commands: `init`, `start`, `stop`, `status`, `logs`, `auth`
-- ✅ OAuth tokens stored in `~/.config/gclaude/antigravity-accounts.json`
-- ✅ `antigravity()` shell function in `.zshrc` for launching Claude Code
-- ✅ Auto-creation of `~/.claude/antigravity-settings.json` during init
-- ✅ Proxy health check shows Antigravity available
+- ✅ Proxy health check and Antigravity status
+- ✅ File read tool calls work end-to-end via Claude Code
+- ✅ Tool-use streaming sends `input_json_delta` (fixes missing tool args)
+- ✅ Web summary works end-to-end using built-in tools when MCP tools are absent
 
-**What Doesn't Work:**
-- ❌ **Requests NOT using Antigravity** - falling back to Gemini CLI instead
-- ❌ Invalid fallback model `gemini-2.5-pro-preview` doesn't exist (404 errors)
-- ❌ Gemini CLI rate limited (quota exhausted on gemini-2.0-flash-exp)
-- ❌ Tool schema error: `EnterPlanMode` incompatible with Gemini format
-- ❌ Claude Code receives no responses (silent failures)
+**What Needs Attention:**
+- 🔧 Confirm Playwright MCP tool registration and usage
+- 🔧 Reduce WebFetch 403 reliance (prefer Playwright tool when available)
+- 🔧 Monitor rate-limit spikes and retry behavior
 
 ---
 
-## Root Cause Analysis
+## Goals
 
-**Primary Issue**: Proxy is NOT routing to Antigravity - falls back to Gemini CLI
-
-From proxy logs (`~/.gclaude/logs/proxy.log`):
-1. **Model routing broken** - requests use Gemini CLI instead of Antigravity
-2. **Invalid fallback model** - `gemini-2.5-pro-preview` doesn't exist (404)
-3. **Gemini CLI quota exhausted** - hitting rate limits on `gemini-2.0-flash-exp`
-4. **Tool schema incompatibility** - `EnterPlanMode` fails Gemini validation
-
-**Health check shows:**
-```json
-"antigravity": {
-  "enabled": true,
-  "available": true,
-  "accounts": 1,
-  "preferred": "antigravity"
-}
-```
-
-But requests still fall back to Gemini CLI - routing logic issue.
+1. **Antigravity-only operation** (no API key mode)
+2. **Clean, consistent documentation** aligned with OAuth-only usage
+3. **Reliable tool-call handling** with clear error messages
+4. **Repeatable validation steps** for file access and web browsing tool calls
 
 ---
 
-## Next Steps - URGENT FIXES
+## In Progress
 
-### 1. ⚠️ Fix Model Routing (CRITICAL)
+### 1) Antigravity-only cleanup (completed)
 
-**Problem**: Proxy health shows Antigravity available but requests use Gemini CLI
+**Tasks:**
+- [x] Remove legacy API key references from server startup and docs
+- [x] Remove fallback model mappings in detector logic
+- [x] Update README/CLAUDE docs to Antigravity-only
+- [x] Enforce OAuth-only startup validation
 
-**Action items:**
-- [ ] Check `gclaude/proxy/server.py` model routing logic - why is Antigravity not used?
-- [ ] Verify `gclaude/proxy/quota_manager.py` actually calls Antigravity client
-- [ ] Add debug logging to see which quota backend is selected
-- [ ] Test with direct Antigravity API call to verify OAuth works
+### 2) Validate tool-call integration
 
-### 2. Fix Invalid Fallback Models
+**Tasks:**
+- [x] Confirm file read tool call works end-to-end
+- [x] Fix tool-use streaming to include `input_json_delta`
+- [x] Confirm web summary works end-to-end (built-in tools)
+- [ ] Confirm Playwright MCP tools are registered and invoked
 
-**Problem**: Config has non-existent models
+### 3) MCP/Playwright verification
 
-**Current config has:**
-```json
-"opus": { "target": "gemini-2.5-pro-preview", "type": "gemini" }
-```
-
-**Action items:**
-- [ ] Update to valid Gemini model: `gemini-2.0-flash-exp` or `gemini-1.5-pro-latest`
-- [ ] Or use Antigravity: `antigravity-claude-opus-4-5-thinking`
-- [ ] Restart proxy after config change
-
-### 3. Fix Tool Schema Errors
-
-**Problem**: `EnterPlanMode` tool fails Gemini validation
-
-**Action items:**
-- [ ] Check `gclaude/proxy/server.py` tool translation - ensure all tools have valid OBJECT schemas
-- [ ] Test with simpler request (no tools) first
-- [ ] Add tool schema validation before sending to Gemini
+**Tasks:**
+- [ ] Ensure Playwright MCP tools appear in tool schema list
+- [ ] Re-run HackerRank summary and verify Playwright tool invocation
+- [ ] Add CLI defaults or docs for `--mcp-config` if needed
 
 ---
 
-## Recent Changes (2026-01-16)
+## Known Risks
 
-### Fixed Today ✅
-| File | Change | Status |
-|------|--------|--------|
-| `gclaude/cli.py:186` | Fixed questionary.Choice bug - use Choice objects instead of dicts | ✅ Fixed |
-| `gclaude/cli.py:189` | Changed Skip option value from `None` to `""` for proper falsy handling | ✅ Fixed |
-| `gclaude/cli.py:272-283` | Auto-create `~/.claude/antigravity-settings.json` during init | ✅ Fixed |
-| `~/.claude/antigravity-settings.json` | Created settings file for `antigravity()` shell function | ✅ Fixed |
-
-### Still Broken ❌
-| Component | Issue | Impact |
-|-----------|-------|--------|
-| Model routing | Requests use Gemini CLI instead of Antigravity | High - Antigravity never used |
-| Fallback models | `gemini-2.5-pro-preview` doesn't exist | High - 404 errors |
-| Gemini quota | Rate limited on `gemini-2.0-flash-exp` | High - No responses |
-| Tool schemas | `EnterPlanMode` fails Gemini validation | Medium - Some requests fail |
+| Area | Risk | Impact |
+|------|------|--------|
+| OAuth tokens | Expired or invalid tokens | Requests fail until re-auth |
+| Model access | Restricted subscription access | Certain models unavailable |
+| Tool schemas | Unsupported schema fields | Tool calls rejected |
+| MCP tools | MCP server not loaded | Web automation falls back to WebFetch |
 
 ---
 
-## Current Configuration
-
-**File**: `~/.gclaude/config.json`
-
-```json
-{
-  "version": "1.0.0",
-  "proxy": {
-    "host": "127.0.0.1",
-    "port": 8082,
-    "log_level": "INFO"
-  },
-  "auth": {
-    "enabled": true,
-    "account_email": "ankurkakroo2@gmail.com"
-  },
-  "models": {
-    "haiku": {
-      "pattern": "*haiku*",
-      "target": "antigravity-gemini-3-pro-high",
-      "type": "antigravity"
-    },
-    "sonnet": {
-      "pattern": "*sonnet*",
-      "target": "antigravity-claude-sonnet-4-5-thinking",
-      "type": "antigravity"
-    },
-    "opus": {
-      "pattern": "*opus*",
-      "target": "antigravity-claude-opus-4-5-thinking",
-      "type": "antigravity"
-    }
-  },
-  "fallback_api_key": "AIzaSyCfy24THExTSHt0aX1qs_J34VQVAOb4KA0"
-}
-```
-
-**Shell Function**: `~/.zshrc` has `antigravity()` function that:
-1. Waits for proxy health check
-2. Launches Claude Code with `--settings ~/.claude/antigravity-settings.json`
-
-**Claude Settings**: `~/.claude/antigravity-settings.json`
-```json
-{
-  "env": {
-    "ANTHROPIC_AUTH_TOKEN": "dummy-key-proxy-handles-auth",
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8082",
-    "API_TIMEOUT_MS": "3000000"
-  }
-}
-```
-
----
-
-## Detected Antigravity Models
-
-From `gclaude init` model detection:
-- ✓ antigravity-gemini-3-flash
-- ✓ antigravity-gemini-3-pro-low
-- ✓ antigravity-gemini-3-pro-high
-- ✓ antigravity-claude-sonnet-4-5
-- ✓ antigravity-claude-sonnet-4-5-thinking
-- ✓ antigravity-claude-opus-4-5-thinking
-- ✓ antigravity-gpt-oss-120b-medium
-
----
-
-## Diagnostic Commands
+## Validation Checklist
 
 ```bash
 # Check proxy status
-gclaude status
+python -m gclaude status
 
-# View logs in real-time
-gclaude logs -f
+# Tail logs
+python -m gclaude logs -f
 
-# Test proxy health
+# Health check
 curl http://127.0.0.1:8082/health | jq
 
-# Check OAuth account
-cat ~/.config/gclaude/antigravity-accounts.json | jq
+# Verify Antigravity status
+curl http://127.0.0.1:8082/antigravity-status | jq
 
-# Check gclaude config
-cat ~/.gclaude/config.json | jq
+# File read test
+claude --settings ~/.claude/antigravity-settings.json \
+  --dangerously-skip-permissions -p --model haiku \
+  "Read README.md and tell me the first line."
 
-# Restart proxy
-gclaude stop && gclaude start
-
-# Test antigravity shell function
-antigravity
+# MCP test (Playwright)
+claude --settings ~/.claude/antigravity-settings.json \
+  --mcp-config ~/.claude/mcp_config.json \
+  --dangerously-skip-permissions -p --model haiku \
+  "Use the Playwright MCP browser to open https://www.hackerrank.com and summarize the homepage."
 ```
-
----
-
-## Architecture
-
-```
-Claude Code CLI
-     ↓ (ANTHROPIC_BASE_URL=http://127.0.0.1:8082)
-gclaude proxy (gclaude/proxy/server.py)
-     ↓ (routes based on model type)
-     ├─→ Antigravity API (OAuth) → Google Gemini 3 models
-     └─→ Gemini CLI API (API key) → Standard Gemini models (fallback)
-```
-
-**Current Problem**: Routing always goes to Gemini CLI fallback instead of Antigravity.

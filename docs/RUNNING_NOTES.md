@@ -1,54 +1,56 @@
 # Running Notes
 
-This document tracks the current working state, issues observed, and fixes applied while integrating Claude Code with Antigravity/Gemini.
+This document tracks the current working state, issues observed, and fixes applied while integrating Claude Code with Antigravity (OAuth).
 
 ## Current State
-- Proxy starts and serves `/health` at `http://127.0.0.1:8082`.
-- OAuth (Antigravity) path is active; Gemini API key path is optional.
-- Tool calling is partially working for local tools (file read tests passed earlier).
-- Web browsing via MCP (Playwright) is still failing.
+- Proxy starts cleanly and serves `/health` at `http://127.0.0.1:8082`.
+- Antigravity-only flow is active (OAuth required; no API key mode).
+- File read tool calls work end-to-end via Claude Code.
+- Web summary works end-to-end (tool chain uses WebFetch/Bash when MCP tools are not registered).
+- Playwright MCP registration still needs confirmation (tool list did not show Playwright tools in latest run).
 
 ## Recent Tests
-- File read via Claude Code succeeded previously (used `Read` tool).
-- Web browsing requests (`hackerrank.com`) still fail due to tool parameter issues and/or MCP availability.
-- CLI execution can fail with `No assistant messages found` when Antigravity rate limits return 429s.
+- Restarted proxy: `python -m gclaude stop` → `python -m gclaude start`.
+- Health checks: `curl http://127.0.0.1:8082/health` and `/antigravity-status` OK.
+- File read test (Claude Code):
+  - Command: `claude --settings ~/.claude/antigravity-settings.json --dangerously-skip-permissions -p --model haiku "Read README.md and tell me the first line."`
+  - Result: `# Antigravity OAuth Proxy for Claude Code`.
+- Web summary test (Claude Code + MCP config):
+  - Command: `claude --settings ~/.claude/antigravity-settings.json --mcp-config ~/.claude/mcp_config.json --dangerously-skip-permissions -p --model haiku "Use the Playwright MCP browser to open https://www.hackerrank.com and summarize the homepage."`
+  - Result: Summary returned (tooling fell back to built-ins; Playwright tools not observed in tool list).
+
+## Progress Log (Chronological)
+- **Tool-call args normalization**
+  - Added proto-args decoding (`fields`, `listValue`) and alias mapping (`url` ⇄ `link`, `query` ⇄ `prompt`) in `gclaude/proxy/antigravity_client.py`.
+  - Preserved `functionCall.id` for tool result matching.
+- **Thought signature forwarding**
+  - Captured `thoughtSignature` from response parts and forwarded it with tool calls.
+- **Tool result handling**
+  - Preserved structured tool results (dict/list) instead of flattening to text.
+- **Rate-limit backoff**
+  - Added async backoff sleeps for 429s to avoid tight retry loops.
+- **Antigravity-only cleanup**
+  - Removed API-key mode and Gemini fallback references from code/docs; startup validates OAuth-only config.
+- **Server start reliability**
+  - `gclaude` now starts the proxy via `python -m gclaude.proxy.server` to avoid `No module named gclaude`.
+- **Tool-use streaming fix (critical)**
+  - Stream tool inputs using `input_json_delta` so Claude Code receives tool args properly.
+  - This fixed missing `file_path` errors and tool-call hangs.
+- **Path inference**
+  - Extract file paths from user text to fill required tool args when the model omits them.
+- **MCP test harness**
+  - Added `--mcp-config ~/.claude/mcp_config.json` to enforce MCP server load during tests.
 
 ## Known Issues
-1. **Web browsing tool call fails**
-   - Symptoms: `Invalid tool parameters` or tool chain stalls after `tabs read`.
-   - Observed tools: `ListMcpResourcesTool`, `ReadMcpResourceTool`, `WebFetch`.
-   - Likely causes: missing MCP resources (Playwright MCP not registered), or tool args missing required fields (e.g., `url`, `prompt`).
-
-2. **Rate limits cause Claude Code to crash**
-   - Symptoms: `No assistant messages found` in the Claude Code CLI.
-   - Proxy logs show repeated 429s with backoff.
-
-3. **`claude` command not found**
-   - `claude` is not on PATH in the current shell; use `npm i -g @anthropic-ai/claude-code` or run the CLI by absolute path.
-
-## Fixes Applied
-- **Tool-call argument handling**
-  - Added decoding for proto-style args (`fields`, `listValue`).
-  - Fill required params from recent user text (e.g., inferred `url`, `prompt`, `query`).
-  - Map common aliases (e.g., `url` ⇄ `link`, `query` ⇄ `prompt`).
-  - Preserve `functionCall.id` for tool result matching.
-
-- **Thought signature handling**
-  - Captures `thoughtSignature` from response parts and forwards it on tool calls.
-
-- **Tool result handling**
-  - Preserve structured tool results (lists/dicts) instead of flattening to text.
-
-- **Rate-limit backoff**
-  - Added async sleep during backoff to prevent tight retry loops.
-
-## Web Browsing (MCP) Progress
-- `ListMcpResourcesTool` calls return no resources when Playwright MCP is not registered.
-- When Playwright MCP is available, tool calls must include required `url` and `prompt` fields to avoid `Invalid tool parameters`.
-- Current focus: ensure MCP tool results are passed through intact and tool args are filled correctly.
+1. **Playwright MCP tools not visible**
+   - Tool schema list did not show Playwright tools in the latest run.
+   - Need to confirm MCP server registration and tool availability.
+2. **WebFetch 403s**
+   - Built-in WebFetch occasionally returns 403; fallback path uses saved HTML + local parsing.
+3. **Rate limits**
+   - Antigravity quotas can still return 429s during heavy runs; backoff mitigates but doesn’t eliminate.
 
 ## Next Steps
-- Verify Playwright MCP registration in Claude Code config.
-- Re-test `hackerrank.com` using Playwright MCP after rate limits clear.
-- If tool errors persist, log the exact tool name/args that failed and add per-tool defaults.
-
+- Confirm Playwright MCP tool registration (tools should appear in the schema list).
+- If Playwright MCP loads, re-run the HackerRank summary and verify Playwright tools are invoked.
+- If Playwright tools still missing, add explicit MCP config discovery in CLI defaults.
