@@ -16,7 +16,7 @@ gclaude/
 ├── server.py             # ProxyServer class (process wrapper)
 ├── detector.py           # Model access detection
 ├── auth.py               # Rich UI for OAuth authentication
-├── shell.py              # Shell helper installer (anticlaude)
+├── shell.py              # Shell helper installer (gclaude)
 ├── utils.py              # Utility functions
 └── proxy/                # Proxy implementation modules
     ├── server.py         # FastAPI app (Claude ↔ Antigravity)
@@ -168,7 +168,7 @@ Client for calling the Antigravity API.
 
 ### `shell.py` - Shell Helper Installer
 
-Installs the `anticlaude` shell function into `.zshrc`/`.bashrc` with auto-start
+Installs the `gclaude` shell function into `.zshrc`/`.bashrc` with auto-start
 and configuration checks.
 
 ### `utils.py` - Utilities

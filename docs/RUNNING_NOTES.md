@@ -8,7 +8,7 @@ This document tracks the current working state, issues observed, and fixes appli
 - File read tool calls work end-to-end via Claude Code.
 - Web summary works end-to-end (tool chain uses WebFetch/Bash when MCP tools are not registered).
 - Playwright MCP registration still needs confirmation (tool list did not show Playwright tools in latest run).
-- One-line install script is available and installs the `anticlaude` shell helper.
+- One-line install script is available and installs the `gclaude` shell helper.
 
 ## Recent Tests
 - Restarted proxy: `python -m gclaude stop` → `python -m gclaude start`.
@@ -20,8 +20,11 @@ This document tracks the current working state, issues observed, and fixes appli
   - Command: `claude --settings ~/.claude/antigravity-settings.json --mcp-config ~/.claude/mcp_config.json --dangerously-skip-permissions -p --model haiku "Use the Playwright MCP browser to open https://www.hackerrank.com and summarize the homepage."`
   - Result: Summary returned (tooling fell back to built-ins; Playwright tools not observed in tool list).
 - Shell helper auto-start test (isolated HOME + stub CLI):
-  - Command: `HOME=/tmp/gclaude-test PATH=/tmp/gclaude-test/bin:$PATH bash -lc "source /tmp/gclaude-test/rc; anticlaude 'ping'"`
-  - Result: `anticlaude` started the proxy, wrote settings, and invoked the `claude` stub with `--settings`.
+  - Command: `HOME=/tmp/gclaude-test PATH=/tmp/gclaude-test/bin:$PATH bash -lc "source /tmp/gclaude-test/rc; gclaude 'ping'"`
+  - Result: `gclaude` started the proxy, wrote settings, and invoked the `claude` stub with `--settings`.
+- Shell helper CLI routing (isolated HOME + stub CLI):
+  - Command: `HOME=/tmp/gclaude-test2 PATH=/tmp/gclaude-test2/bin:$PATH bash -lc "source /tmp/gclaude-test2/rc; gclaude status"`
+  - Result: `gclaude` routed `status` to the CLI (`status-ok`).
 
 ## Progress Log (Chronological)
 - **Tool-call args normalization**
@@ -47,7 +50,9 @@ This document tracks the current working state, issues observed, and fixes appli
 - **Install UX**
   - Added `scripts/install.sh` for no-clone installation.
   - Added `gclaude install-shell` to manage the shell helper.
-  - `anticlaude` now auto-starts the proxy and guides setup if config is missing.
+  - `gclaude` now auto-starts the proxy and guides setup if config is missing.
+  - Removed `gcloud` references; helper/README stay Antigravity-only.
+  - Shell helper now uses the `gclaude` name and routes server subcommands to the CLI.
 
 ## Known Issues
 1. **Playwright MCP tools not visible**

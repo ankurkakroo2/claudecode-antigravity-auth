@@ -4,7 +4,7 @@
 
 ## Install (No Repo Clone)
 
-One-line install that adds the `anticlaude` helper to your shell and sets up the proxy runner:
+One-line install that adds the `gclaude` helper to your shell and sets up the proxy runner:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ankurkakroo2/claudecode-antigravity-auth/main/scripts/install.sh | bash
@@ -12,14 +12,17 @@ curl -fsSL https://raw.githubusercontent.com/ankurkakroo2/claudecode-antigravity
 
 After install:
 - Initialize OAuth + model mappings: `gclaude init`
-- If needed: `gcloud init`
-- Run Claude Code with auto-starting proxy: `anticlaude "your prompt"`
+- Run Claude Code with auto-starting proxy: `gclaude "your prompt"`
 
 You can also install the helper manually with:
 
 ```bash
 gclaude install-shell
 ```
+
+The shell helper is named `gclaude`. It routes `gclaude start|stop|status|...` to the
+server CLI, and treats everything else as a Claude Code invocation. For explicit CLI
+help, use `gclaude cli --help`.
 
 ## Quick Start (OAuth / Google AI Pro)
 
@@ -48,14 +51,14 @@ This proxy is **Antigravity-only** (Google OAuth). No Gemini API key is supporte
    ```
 5. **Run Claude Code via the helper**
    ```bash
-   anticlaude "ping"
+   gclaude "ping"
    ```
 6. **Verify**
    ```bash
    opencode run -m google/antigravity-claude-sonnet-4-5-thinking "ping"
    opencode run -m google/antigravity-claude-opus-4-5-thinking "ping"
-   anticlaude -p --model sonnet "ping"
-   anticlaude -p --model opus "ping"
+   gclaude -p --model sonnet "ping"
+   gclaude -p --model opus "ping"
    ```
 
 ## Docs
@@ -98,10 +101,10 @@ This server bridges **Claude Code** with **Antigravity (Google OAuth)**. It tran
 
 ## Usage with Claude Code
 
-1. **Use the shell helper (recommended)**: `anticlaude` auto-starts the proxy, writes
+1. **Use the shell helper (recommended)**: `gclaude` auto-starts the proxy, writes
    `~/.claude/antigravity-settings.json`, and uses `~/.claude/mcp_config.json` if present.
    ```bash
-   anticlaude "summarize my repo"
+   gclaude "summarize my repo"
    ```
    If Claude Code asks for a token, set `ANTHROPIC_AUTH_TOKEN` to any dummy value.
 
@@ -113,8 +116,8 @@ This server bridges **Claude Code** with **Antigravity (Google OAuth)**. It tran
 
 3. **Quick non-interactive test**
    ```bash
-   anticlaude -p --model sonnet "ping"
-   anticlaude -p --model opus "ping"
+   gclaude -p --model sonnet "ping"
+   gclaude -p --model opus "ping"
    ```
 
 ## How It Works

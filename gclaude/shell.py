@@ -15,12 +15,31 @@ SHELL_BLOCK_END = "# <<< gclaude <<<"
 def render_shell_function() -> str:
     return textwrap.dedent(
         """
-        anticlaude() {
+        gclaude() {
           local gclaude_cmd=()
-          if command -v gclaude >/dev/null 2>&1; then
-            gclaude_cmd=(gclaude)
+          if command -v gclaude >/dev/null 2>&1 && type -P gclaude >/dev/null 2>&1; then
+            gclaude_cmd=(command gclaude)
           else
             gclaude_cmd=(python3 -m gclaude)
+          fi
+
+          local cli_cmds=("init" "start" "stop" "restart" "status" "logs" "auth" "config" "models" "set-model" "update" "install-shell" "cli")
+          local wants_cli=0
+          if [ $# -gt 0 ]; then
+            for cmd in "${cli_cmds[@]}"; do
+              if [ "$1" = "$cmd" ]; then
+                wants_cli=1
+                break
+              fi
+            done
+          fi
+
+          if [ "$wants_cli" -eq 1 ]; then
+            if [ "$1" = "cli" ]; then
+              shift
+            fi
+            "${gclaude_cmd[@]}" "$@"
+            return $?
           fi
 
           if ! command -v claude >/dev/null 2>&1; then
@@ -31,7 +50,6 @@ def render_shell_function() -> str:
           local config_path="$HOME/.gclaude/config.json"
           if [ ! -f "$config_path" ]; then
             echo "gclaude is not configured. Run: gclaude init"
-            echo "If needed: gcloud init"
             return 1
           fi
 
@@ -66,7 +84,6 @@ PY
 
           if [ "$auth_enabled" != "1" ]; then
             echo "OAuth not configured. Run: gclaude init"
-            echo "If needed: gcloud init"
             return 1
           fi
 

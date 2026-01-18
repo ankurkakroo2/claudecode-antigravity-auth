@@ -72,5 +72,5 @@ fi
 echo ""
 echo "Install complete."
 echo "- Initialize OAuth + model mappings: gclaude init"
-echo "- If needed: gcloud init"
-echo "- Then run: anticlaude \"your prompt\""
+echo "- Then run: gclaude \"your prompt\""
+echo "- Manage the server with: gclaude start|stop|status"

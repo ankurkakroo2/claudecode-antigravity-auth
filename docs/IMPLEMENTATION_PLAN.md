@@ -10,7 +10,7 @@
 - ✅ File read tool calls work end-to-end via Claude Code
 - ✅ Tool-use streaming sends `input_json_delta` (fixes missing tool args)
 - ✅ Web summary works end-to-end using built-in tools when MCP tools are absent
-- ✅ One-line install script adds `anticlaude` shell helper
+- ✅ One-line install script adds `gclaude` shell helper
 - ✅ Shell helper auto-starts proxy and guards setup
 - ✅ Shell helper auto-start validated with a stubbed proxy + CLI
 
