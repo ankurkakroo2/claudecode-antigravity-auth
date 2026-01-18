@@ -23,6 +23,8 @@ try:
         AntigravityRateLimitError,
         get_model_for_claude_alias,
         convert_gemini_stream_to_anthropic_format,
+        TOOL_THOUGHT_SIGNATURES,
+        TOOL_CALL_CONTEXT,
     )
     from quota_manager import QuotaManager, QuotaType
 
@@ -50,6 +52,7 @@ class Constants:
 
     CONTENT_TEXT = "text"
     CONTENT_IMAGE = "image"
+    CONTENT_THINKING = "thinking"
     CONTENT_TOOL_USE = "tool_use"
     CONTENT_TOOL_RESULT = "tool_result"
 
@@ -268,6 +271,7 @@ for uvicorn_logger in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
     logging.getLogger(uvicorn_logger).setLevel(logging.WARNING)
 
 app = FastAPI(title="Gemini-to-Claude API Proxy", version="2.5.0")
+antigravity_request_lock = asyncio.Semaphore(1)
 
 
 # Enhanced error classification
@@ -390,6 +394,11 @@ class ContentBlockToolUse(BaseModel):
     input: Dict[str, Any]
 
 
+class ContentBlockThinking(BaseModel):
+    type: Literal["thinking"]
+    thinking: str
+
+
 class ContentBlockToolResult(BaseModel):
     type: Literal["tool_result"]
     tool_use_id: str
@@ -406,7 +415,13 @@ class Message(BaseModel):
     content: Union[
         str,
         List[
-            Union[ContentBlockText, ContentBlockImage, ContentBlockToolUse, ContentBlockToolResult]
+            Union[
+                ContentBlockText,
+                ContentBlockImage,
+                ContentBlockThinking,
+                ContentBlockToolUse,
+                ContentBlockToolResult,
+            ]
         ],
     ]
 
@@ -508,29 +523,19 @@ def parse_tool_result_content(content):
         return content
 
     if isinstance(content, list):
-        result_parts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == Constants.CONTENT_TEXT:
-                result_parts.append(item.get("text", ""))
-            elif isinstance(item, str):
-                result_parts.append(item)
-            elif isinstance(item, dict):
-                if "text" in item:
-                    result_parts.append(item.get("text", ""))
-                else:
-                    try:
-                        result_parts.append(json.dumps(item))
-                    except:
-                        result_parts.append(str(item))
-        return "\n".join(result_parts).strip()
+        if all(
+            isinstance(item, dict) and item.get("type") == Constants.CONTENT_TEXT
+            for item in content
+        ):
+            joined = "\n".join(item.get("text", "") for item in content).strip()
+            if joined:
+                return joined
+        return content
 
     if isinstance(content, dict):
         if content.get("type") == Constants.CONTENT_TEXT:
             return content.get("text", "")
-        try:
-            return json.dumps(content)
-        except:
-            return str(content)
+        return content
 
     try:
         return str(content)
@@ -542,6 +547,7 @@ def parse_tool_result_content(content):
 def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str, Any]:
     """Convert Anthropic API request format to LiteLLM format for Gemini."""
     litellm_messages = []
+    tool_id_to_name: Dict[str, str] = {}
 
     # System message handling
     if anthropic_request.system:
@@ -575,6 +581,9 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         for block in msg.content:
             if block.type == Constants.CONTENT_TEXT:
                 text_parts.append(block.text)
+            elif block.type == Constants.CONTENT_THINKING:
+                # Skip model thinking blocks when forwarding to Gemini
+                continue
             elif block.type == Constants.CONTENT_IMAGE:
                 if (
                     isinstance(block.source, dict)
@@ -591,14 +600,20 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                         }
                     )
             elif block.type == Constants.CONTENT_TOOL_USE and msg.role == Constants.ROLE_ASSISTANT:
+                if isinstance(block.id, str) and isinstance(block.name, str):
+                    tool_id_to_name[block.id] = block.name
+                thought_signature = TOOL_THOUGHT_SIGNATURES.get(block.id)
+                function_payload = {
+                    "name": block.name,
+                    "arguments": json.dumps(block.input),
+                }
+                if thought_signature:
+                    function_payload["thought_signature"] = thought_signature
                 tool_calls.append(
                     {
                         "id": block.id,
                         "type": Constants.TOOL_FUNCTION,
-                        Constants.TOOL_FUNCTION: {
-                            "name": block.name,
-                            "arguments": json.dumps(block.input),
-                        },
+                        Constants.TOOL_FUNCTION: function_payload,
                     }
                 )
             elif block.type == Constants.CONTENT_TOOL_RESULT and msg.role == Constants.ROLE_USER:
@@ -624,6 +639,12 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
 
                 # Add tool result as separate "tool" role message
                 parsed_content = parse_tool_result_content(block.content)
+                logger.debug(
+                    "Tool result captured: tool_use_id=%s type=%s size=%s",
+                    block.tool_use_id,
+                    type(block.content).__name__,
+                    len(parsed_content) if isinstance(parsed_content, str) else "n/a",
+                )
                 pending_tool_messages.append(
                     {
                         "role": Constants.ROLE_TOOL,
@@ -704,6 +725,8 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         valid_tools = []
         for tool in anthropic_request.tools:
             if tool.name and tool.name.strip():
+                if tool.name == "TodoWrite":
+                    continue
                 cleaned_schema = clean_gemini_schema(tool.input_schema)
                 valid_tools.append(
                     {
@@ -716,6 +739,10 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                     }
                 )
         if valid_tools:
+            logger.info(
+                "Tool schema names: %s",
+                [t[Constants.TOOL_FUNCTION]["name"] for t in valid_tools],
+            )
             litellm_request["tools"] = valid_tools
 
     # Add tool choice configuration
@@ -1286,6 +1313,9 @@ async def _handle_antigravity_request(
         params["top_k"] = request.top_k
     if request.tools:
         params["tools"] = litellm_request.get("tools", [])
+        params["tool_schemas"] = {tool.name: tool.input_schema for tool in request.tools if tool.name}
+    if request.tool_choice:
+        params["tool_choice"] = request.tool_choice
 
     # Log request
     num_tools = len(request.tools) if request.tools else 0
@@ -1302,25 +1332,70 @@ async def _handle_antigravity_request(
     try:
         if request.stream:
             # Streaming response
-            stream_generator = await quota_manager.generate_content(
-                model=antigravity_model,
-                messages=litellm_request["messages"],
-                stream=True,
-                **params,
-            )
+            try:
+                async with antigravity_request_lock:
+                    stream_generator = await quota_manager.generate_content(
+                        model=antigravity_model,
+                        messages=litellm_request["messages"],
+                        stream=True,
+                        **params,
+                    )
+            except Exception as e:
+                if (
+                    "AntigravityRateLimitError" in globals()
+                    and AntigravityRateLimitError
+                    and isinstance(e, AntigravityRateLimitError)
+                ):
+                    retry_after = getattr(e, "retry_after_seconds", None)
+                    headers = {
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "*",
+                    }
+                    if isinstance(retry_after, (int, float)):
+                        headers["Retry-After"] = str(int(retry_after) + 1)
+
+                    error_text = f"Rate limit exceeded. Please retry in {retry_after or 'a few'} seconds."
+
+                    async def rate_limit_stream():
+                        message_id = f"msg_{uuid.uuid4().hex[:24]}"
+                        yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': message_id, 'type': 'message', 'role': Constants.ROLE_ASSISTANT, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': Constants.CONTENT_TEXT, 'text': ''}})}\n\n"
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': Constants.DELTA_TEXT, 'text': error_text}})}\n\n"
+                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+                        yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': Constants.STOP_ERROR, 'stop_sequence': None}, 'usage': {'input_tokens': 0, 'output_tokens': 0}})}\n\n"
+                        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+
+                    return StreamingResponse(rate_limit_stream(), media_type="text/event-stream", headers=headers)
+
+                raise
 
             async def antigravity_stream_wrapper():
                 """Wrapper to convert Antigravity stream to Anthropic SSE format."""
+                import uuid
+
+                started = False
+                message_id = f"msg_{uuid.uuid4().hex[:24]}"
                 try:
                     async for sse_event in convert_gemini_stream_to_anthropic_format(
                         stream_generator,
                         request.original_model or request.model,
+                        tool_schemas=params.get("tool_schemas"),
                     ):
+                        started = True
                         yield sse_event
                 except Exception as e:
                     logger.error(f"Error in Antigravity stream: {e}")
-                    # Send error event
-                    yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                    error_text = f"Antigravity stream error: {str(e)}"
+                    if not started:
+                        yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': message_id, 'type': 'message', 'role': Constants.ROLE_ASSISTANT, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': Constants.CONTENT_TEXT, 'text': ''}})}\n\n"
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': error_text}})}\n\n"
+                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+                    yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': Constants.STOP_ERROR, 'stop_sequence': None}, 'usage': {'input_tokens': 0, 'output_tokens': 0}})}\n\n"
+                    yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
 
             return StreamingResponse(
                 antigravity_stream_wrapper(),
@@ -1335,12 +1410,13 @@ async def _handle_antigravity_request(
             )
         else:
             # Non-streaming response
-            response = await quota_manager.generate_content(
-                model=antigravity_model,
-                messages=litellm_request["messages"],
-                stream=False,
-                **params,
-            )
+            async with antigravity_request_lock:
+                response = await quota_manager.generate_content(
+                    model=antigravity_model,
+                    messages=litellm_request["messages"],
+                    stream=False,
+                    **params,
+                )
 
             return response
 

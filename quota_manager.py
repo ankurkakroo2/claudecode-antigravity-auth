@@ -9,6 +9,7 @@ behavior and to surface real Antigravity/OAuth errors.
 
 import json
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -107,11 +108,10 @@ class QuotaManager:
         rate_limited_until = self.antigravity_state.rate_limited_until
         if rate_limited_until and datetime.now() < rate_limited_until:
             retry_after = (rate_limited_until - datetime.now()).total_seconds()
-            raise AntigravityRateLimitError(
-                "Antigravity is rate limited. Please retry later.",
-                endpoint="antigravity",
-                retry_after_seconds=retry_after if retry_after > 0 else None,
-            )
+            wait_seconds = max(retry_after, 0)
+            logger.warning("Antigravity rate limited; waiting %ss", round(wait_seconds, 2))
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
         # Clear expired backoff if needed.
         self.antigravity_state.is_available()
 
@@ -212,7 +212,9 @@ class QuotaManager:
 
             response = await client.generate_content(model, messages, **kwargs)
             self.antigravity_state.mark_success()
-            return convert_gemini_to_anthropic_format(response)
+            return convert_gemini_to_anthropic_format(
+                response, kwargs.get("tool_schemas")
+            )
 
         except AntigravityRateLimitError as e:
             logger.warning(f"Antigravity rate limited: {e}")

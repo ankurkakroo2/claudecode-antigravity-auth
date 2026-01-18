@@ -12,6 +12,8 @@ Endpoints (in order of preference):
 
 import json
 import asyncio
+import os
+import re
 import uuid
 from typing import Any, Optional, AsyncIterator, Dict, List
 from datetime import datetime
@@ -28,6 +30,7 @@ AUTOPUSH_ENDPOINT = "https://autopush-cloudcode-pa.sandbox.googleapis.com"
 GEMINI_CLI_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 
 # Combined endpoint list for Antigravity fallback (ordered by preference)
+# Prefer sandbox OAuth endpoints; only attempt production if available.
 ANTIGRAVITY_ENDPOINTS = [ANTIGRAVITY_ENDPOINT, AUTOPUSH_ENDPOINT, GEMINI_CLI_ENDPOINT]
 
 # Headers for each quota type
@@ -59,6 +62,75 @@ CLAUDE_MODELS = {"claude-sonnet-4-5-thinking", "claude-opus-4-5-thinking", "clau
 
 CLAUDE_THINKING_DEFAULT_BUDGET = 32768
 CLAUDE_THINKING_MAX_OUTPUT_TOKENS = 64000
+ANTIGRAVITY_INCLUDE_THOUGHTS = os.getenv("ANTIGRAVITY_INCLUDE_THOUGHTS", "false").lower() == "true"
+
+# Cache tool call context so tool results can be described to Gemini.
+TOOL_THOUGHT_SIGNATURES: Dict[str, str] = {}
+TOOL_CALL_CONTEXT: Dict[str, Dict[str, Any]] = {}
+LAST_THOUGHT_SIGNATURE: Optional[str] = None
+LAST_USER_TEXT: str = ""
+LAST_USER_URLS: List[str] = []
+
+
+def _extract_urls(text: str) -> List[str]:
+    if not isinstance(text, str) or not text:
+        return []
+    urls: List[str] = []
+    for match in re.findall(r"https?://[^\s)\"']+", text):
+        cleaned = match.rstrip(".,;:!?)")
+        if cleaned:
+            urls.append(cleaned)
+
+    domain_matches = re.findall(r"\b([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(/[^\s\"')]+)?", text)
+    for domain, path in domain_matches:
+        if domain.startswith("http"):
+            continue
+        candidate = f"https://{domain}{path or ''}"
+        if candidate not in urls:
+            urls.append(candidate)
+    return urls
+
+
+def _extract_text_from_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text", "")))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(p for p in parts if p).strip()
+    if isinstance(content, dict) and content.get("type") == "text":
+        return str(content.get("text", ""))
+    return ""
+
+
+def _update_last_user_context(messages: List[Dict[str, Any]]) -> None:
+    global LAST_USER_TEXT, LAST_USER_URLS
+    last_text = ""
+    for msg in messages:
+        if msg.get("role") == "user":
+            text = _extract_text_from_content(msg.get("content"))
+            if text:
+                last_text = text
+    LAST_USER_TEXT = last_text
+    LAST_USER_URLS = _extract_urls(last_text)
+
+
+def _is_license_error(error_msg: str) -> bool:
+    if not isinstance(error_msg, str) or not error_msg:
+        return False
+    msg = error_msg.lower()
+    if "code assist" in msg or "codeassist" in msg:
+        return True
+    if "license" in msg and ("gemini" in msg or "code" in msg):
+        return True
+    if "not enabled" in msg and "gemini" in msg:
+        return True
+    return False
 
 # Model mapping for Antigravity
 ANTIGRAVITY_MODELS = {
@@ -272,7 +344,17 @@ class AntigravityClient:
                     except json.JSONDecodeError:
                         pass
 
-                    error_msg = error_data.get("error", {}).get("message", "Authentication failed")
+                    error_msg = (
+                        error_data.get("error", {}).get("message")
+                        if isinstance(error_data, dict)
+                        else None
+                    )
+                    if not error_msg:
+                        error_msg = response_text or "Authentication failed"
+
+                    if response.status == 403 and _is_license_error(error_msg):
+                        raise AntigravityClientError(f"Endpoint license error: {error_msg}")
+
                     raise AntigravityAuthError(f"Authentication error: {error_msg}")
 
                 elif response.status == 429:
@@ -335,15 +417,21 @@ class AntigravityClient:
         Returns:
             dict: Generation response
         """
+        _update_last_user_context(messages)
+
         # Convert messages to Gemini format
         contents = []
         system_texts: List[str] = []
         api_model = get_api_model_name(model)
         is_claude_thinking = is_claude_thinking_model(api_model)
 
+        tool_responses = [m for m in messages if m.get("role") == "tool"]
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
+
+            if role == "tool":
+                continue
 
             # Handle system instruction
             if role == "system":
@@ -359,15 +447,51 @@ class AntigravityClient:
             else:
                 gemini_role = "user"
 
+            parts = []
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                if not isinstance(tool_calls, list):
+                    tool_calls = [tool_calls]
+                for tool_call in tool_calls:
+                    function_data = {}
+                    if isinstance(tool_call, dict):
+                        function_data = tool_call.get("function", {})
+                    name = function_data.get("name")
+                    arguments_raw = function_data.get("arguments", "{}")
+                    thought_signature = function_data.get("thought_signature") or function_data.get(
+                        "thoughtSignature"
+                    )
+                    args_dict = {}
+                    if isinstance(arguments_raw, str):
+                        try:
+                            args_dict = json.loads(arguments_raw)
+                        except json.JSONDecodeError:
+                            args_dict = {}
+                    elif isinstance(arguments_raw, dict):
+                        args_dict = arguments_raw
+                    if name:
+                        parts.append(
+                            {
+                                "functionCall": {
+                                    "id": tool_call.get("id"),
+                                    "name": name,
+                                    "args": args_dict,
+                                }
+                            }
+                        )
+                        if thought_signature:
+                            parts[-1]["thoughtSignature"] = thought_signature
+
             # Handle content as string or list of parts
-            if isinstance(content, str):
-                parts = [{"text": content}]
+            if isinstance(content, str) and content:
+                parts.append({"text": content})
             elif isinstance(content, list):
-                parts = []
                 for item in content:
                     if isinstance(item, dict):
                         if item.get("type") == "text":
-                            parts.append({"text": item.get("text", "")})
+                            text_value = item.get("text", "")
+                            if text_value:
+                                parts.append({"text": text_value})
                         elif item.get("type") == "image_url":
                             parts.append(
                                 {
@@ -381,10 +505,41 @@ class AntigravityClient:
                             )
                     else:
                         parts.append({"text": str(item)})
-            else:
-                parts = [{"text": str(content)}]
 
             contents.append({"role": gemini_role, "parts": parts})
+
+            if gemini_role == "model" and tool_calls:
+                function_responses = []
+                for tool_call in tool_calls:
+                    if not isinstance(tool_call, dict):
+                        continue
+                    tool_id = tool_call.get("id")
+                    function_data = tool_call.get("function", {})
+                    tool_name = function_data.get("name")
+                    if not tool_id or not tool_name:
+                        continue
+                    response = next(
+                        (r for r in tool_responses if r.get("tool_call_id") == tool_id),
+                        None,
+                    )
+                    if response is None:
+                        logger.warning(
+                            "No tool response found for tool_call_id=%s name=%s",
+                            tool_id,
+                            tool_name,
+                        )
+                        continue
+                    result_content = response.get("content", "")
+                    function_responses.append(
+                        {
+                            "functionResponse": {
+                                "name": tool_name,
+                                "response": {"result": result_content},
+                            }
+                        }
+                    )
+                if function_responses:
+                    contents.append({"role": "user", "parts": function_responses})
 
         # Build request body
         request_body: Dict[str, Any] = {
@@ -416,10 +571,13 @@ class AntigravityClient:
 
         if is_claude_thinking:
             thinking_budget = kwargs.get("thinking_budget", CLAUDE_THINKING_DEFAULT_BUDGET)
-            thinking_config: Dict[str, Any] = {"include_thoughts": True}
+            thinking_config: Dict[str, Any] = {}
             if isinstance(thinking_budget, int) and thinking_budget > 0:
-                thinking_config["thinking_budget"] = thinking_budget
-            config["thinkingConfig"] = thinking_config
+                thinking_config["thinkingBudget"] = thinking_budget
+            if ANTIGRAVITY_INCLUDE_THOUGHTS:
+                thinking_config["includeThoughts"] = True
+            if thinking_config:
+                config["thinkingConfig"] = thinking_config
 
             max_output_tokens = config.get("maxOutputTokens")
             if not isinstance(max_output_tokens, int) or max_output_tokens <= (
@@ -447,6 +605,31 @@ class AntigravityClient:
             if function_declarations:
                 request_body["tools"] = [{"functionDeclarations": function_declarations}]
 
+        tool_choice = kwargs.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            choice_type = tool_choice.get("type")
+            if choice_type == "auto":
+                request_body["toolConfig"] = {
+                    "functionCallingConfig": {"mode": "AUTO"}
+                }
+            elif choice_type == "any":
+                request_body["toolConfig"] = {
+                    "functionCallingConfig": {"mode": "ANY"}
+                }
+            elif choice_type == "none":
+                request_body["toolConfig"] = {
+                    "functionCallingConfig": {"mode": "NONE"}
+                }
+            elif choice_type == "tool":
+                name = tool_choice.get("name")
+                if isinstance(name, str) and name:
+                    request_body["toolConfig"] = {
+                        "functionCallingConfig": {
+                            "mode": "ANY",
+                            "allowedFunctionNames": [name],
+                        }
+                    }
+
         request_body.setdefault("sessionId", f"session-{uuid.uuid4()}")
 
         # Dual-quota system with intelligent fallback
@@ -467,10 +650,7 @@ class AntigravityClient:
             (endpoint, "antigravity", api_model) for endpoint in ANTIGRAVITY_ENDPOINTS
         ]
 
-        # Add Gemini CLI fallback for compatible models
-        if self.can_use_cli_fallback(api_model):
-            cli_model = self.get_model_for_quota(api_model, "gemini-cli")
-            quota_strategies.append((GEMINI_CLI_ENDPOINT, "gemini-cli", cli_model))
+        # OAuth-only: disable Gemini CLI fallback to avoid 401s in Claude Code.
 
         # Try each quota strategy with exponential backoff
         max_retries = 3
@@ -503,7 +683,7 @@ class AntigravityClient:
                     logger.warning(
                         f"Rate limit hit on {endpoint} (quota={quota_type}, model={effective_model})"
                     )
-                    continue  # Try next quota strategy
+                    continue
 
                 except AntigravityAuthError as e:
                     raise e  # Auth errors should not trigger fallback
@@ -537,6 +717,8 @@ class AntigravityClient:
         Yields:
             dict: Streaming response chunks
         """
+        _update_last_user_context(messages)
+
         # Convert messages to Gemini format (same as non-streaming)
         contents = []
         system_texts: List[str] = []
@@ -544,9 +726,13 @@ class AntigravityClient:
         api_model = get_api_model_name(model)
         is_claude_thinking = is_claude_thinking_model(api_model)
 
+        tool_responses = [m for m in messages if m.get("role") == "tool"]
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
+
+            if role == "tool":
+                continue
 
             if role == "system":
                 if isinstance(content, str):
@@ -560,14 +746,50 @@ class AntigravityClient:
             else:
                 gemini_role = "user"
 
-            if isinstance(content, str):
-                parts = [{"text": content}]
+            parts = []
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                if not isinstance(tool_calls, list):
+                    tool_calls = [tool_calls]
+                for tool_call in tool_calls:
+                    function_data = {}
+                    if isinstance(tool_call, dict):
+                        function_data = tool_call.get("function", {})
+                    name = function_data.get("name")
+                    arguments_raw = function_data.get("arguments", "{}")
+                    thought_signature = function_data.get("thought_signature") or function_data.get(
+                        "thoughtSignature"
+                    )
+                    args_dict = {}
+                    if isinstance(arguments_raw, str):
+                        try:
+                            args_dict = json.loads(arguments_raw)
+                        except json.JSONDecodeError:
+                            args_dict = {}
+                    elif isinstance(arguments_raw, dict):
+                        args_dict = arguments_raw
+                    if name:
+                        parts.append(
+                            {
+                                "functionCall": {
+                                    "id": tool_call.get("id"),
+                                    "name": name,
+                                    "args": args_dict,
+                                }
+                            }
+                        )
+                        if thought_signature:
+                            parts[-1]["thoughtSignature"] = thought_signature
+
+            if isinstance(content, str) and content:
+                parts.append({"text": content})
             elif isinstance(content, list):
-                parts = []
                 for item in content:
                     if isinstance(item, dict):
                         if item.get("type") == "text":
-                            parts.append({"text": item.get("text", "")})
+                            text_value = item.get("text", "")
+                            if text_value:
+                                parts.append({"text": text_value})
                         elif item.get("type") == "image_url":
                             url = item.get("image_url", {}).get("url", "")
                             if url.startswith("data:"):
@@ -578,10 +800,41 @@ class AntigravityClient:
                                 )
                     else:
                         parts.append({"text": str(item)})
-            else:
-                parts = [{"text": str(content)}]
 
             contents.append({"role": gemini_role, "parts": parts})
+
+            if gemini_role == "model" and tool_calls:
+                function_responses = []
+                for tool_call in tool_calls:
+                    if not isinstance(tool_call, dict):
+                        continue
+                    tool_id = tool_call.get("id")
+                    function_data = tool_call.get("function", {})
+                    tool_name = function_data.get("name")
+                    if not tool_id or not tool_name:
+                        continue
+                    response = next(
+                        (r for r in tool_responses if r.get("tool_call_id") == tool_id),
+                        None,
+                    )
+                    if response is None:
+                        logger.warning(
+                            "No tool response found for tool_call_id=%s name=%s",
+                            tool_id,
+                            tool_name,
+                        )
+                        continue
+                    result_content = response.get("content", "")
+                    function_responses.append(
+                        {
+                            "functionResponse": {
+                                "name": tool_name,
+                                "response": {"result": result_content},
+                            }
+                        }
+                    )
+                if function_responses:
+                    contents.append({"role": "user", "parts": function_responses})
 
         request_body: Dict[str, Any] = {
             "contents": contents,
@@ -610,10 +863,13 @@ class AntigravityClient:
 
         if is_claude_thinking:
             thinking_budget = kwargs.get("thinking_budget", CLAUDE_THINKING_DEFAULT_BUDGET)
-            thinking_config: Dict[str, Any] = {"include_thoughts": True}
+            thinking_config: Dict[str, Any] = {}
             if isinstance(thinking_budget, int) and thinking_budget > 0:
-                thinking_config["thinking_budget"] = thinking_budget
-            config["thinkingConfig"] = thinking_config
+                thinking_config["thinkingBudget"] = thinking_budget
+            if ANTIGRAVITY_INCLUDE_THOUGHTS:
+                thinking_config["includeThoughts"] = True
+            if thinking_config:
+                config["thinkingConfig"] = thinking_config
 
             max_output_tokens = config.get("maxOutputTokens")
             if not isinstance(max_output_tokens, int) or max_output_tokens <= (
@@ -640,6 +896,31 @@ class AntigravityClient:
             if function_declarations:
                 request_body["tools"] = [{"functionDeclarations": function_declarations}]
 
+        tool_choice = kwargs.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            choice_type = tool_choice.get("type")
+            if choice_type == "auto":
+                request_body["toolConfig"] = {
+                    "functionCallingConfig": {"mode": "AUTO"}
+                }
+            elif choice_type == "any":
+                request_body["toolConfig"] = {
+                    "functionCallingConfig": {"mode": "ANY"}
+                }
+            elif choice_type == "none":
+                request_body["toolConfig"] = {
+                    "functionCallingConfig": {"mode": "NONE"}
+                }
+            elif choice_type == "tool":
+                name = tool_choice.get("name")
+                if isinstance(name, str) and name:
+                    request_body["toolConfig"] = {
+                        "functionCallingConfig": {
+                            "mode": "ANY",
+                            "allowedFunctionNames": [name],
+                        }
+                    }
+
         request_body.setdefault("sessionId", f"session-{uuid.uuid4()}")
 
         # Dual-quota system with intelligent fallback (streaming version)
@@ -648,9 +929,7 @@ class AntigravityClient:
         quota_strategies = [
             (endpoint, "antigravity", api_model) for endpoint in ANTIGRAVITY_ENDPOINTS
         ]
-        if self.can_use_cli_fallback(api_model):
-            cli_model = self.get_model_for_quota(api_model, "gemini-cli")
-            quota_strategies.append((GEMINI_CLI_ENDPOINT, "gemini-cli", cli_model))
+        # OAuth-only: disable Gemini CLI fallback to avoid 401s in Claude Code.
 
         # Try each quota strategy with retries
         max_retries = 3
@@ -683,7 +962,27 @@ class AntigravityClient:
                             logger.debug(f"Streaming response status: {response.status}")
 
                             if response.status == 401 or response.status == 403:
-                                raise AntigravityAuthError("Authentication failed")
+                                error_text = await response.text()
+                                error_data = {}
+                                try:
+                                    error_data = json.loads(error_text)
+                                except json.JSONDecodeError:
+                                    pass
+
+                                error_msg = (
+                                    error_data.get("error", {}).get("message")
+                                    if isinstance(error_data, dict)
+                                    else None
+                                )
+                                if not error_msg:
+                                    error_msg = error_text or "Authentication failed"
+
+                                if response.status == 403 and _is_license_error(error_msg):
+                                    raise AntigravityClientError(
+                                        f"Endpoint license error: {error_msg}"
+                                    )
+
+                                raise AntigravityAuthError(f"Authentication failed: {error_msg}")
 
                             if response.status == 429:
                                 raise AntigravityRateLimitError(
@@ -726,7 +1025,7 @@ class AntigravityClient:
                     logger.warning(
                         f"Rate limit hit on {endpoint} (quota={quota_type}, model={effective_model})"
                     )
-                    continue  # Try next quota strategy
+                    continue
 
                 except AntigravityAuthError:
                     raise
@@ -769,7 +1068,231 @@ def get_model_for_claude_alias(claude_model: str) -> Optional[str]:
     return None
 
 
-def convert_gemini_to_anthropic_format(gemini_response: Dict[str, Any]) -> Dict[str, Any]:
+def _unwrap_proto_struct(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    fields = value.get("fields")
+    if isinstance(fields, dict):
+        return {k: _unwrap_proto_value(v) for k, v in fields.items()}
+    return value
+
+
+def _unwrap_proto_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        if "stringValue" in value:
+            return value.get("stringValue")
+        if "numberValue" in value:
+            return value.get("numberValue")
+        if "boolValue" in value:
+            return value.get("boolValue")
+        if "nullValue" in value:
+            return None
+        if "structValue" in value:
+            return _unwrap_proto_struct(value.get("structValue"))
+        if "listValue" in value:
+            values = value.get("listValue", {}).get("values", [])
+            if isinstance(values, list):
+                return [_unwrap_proto_value(v) for v in values]
+    return value
+
+
+def parse_function_args(func_call: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize functionCall args into a dict for Anthropic tool_use."""
+    args = None
+    if isinstance(func_call, dict):
+        if "args" in func_call:
+            args = func_call.get("args")
+        elif "arguments" in func_call:
+            args = func_call.get("arguments")
+        elif "argsJson" in func_call:
+            args = func_call.get("argsJson")
+
+    if isinstance(args, dict):
+        if "fields" in args or "structValue" in args:
+            return _unwrap_proto_value(args) if "structValue" in args else _unwrap_proto_struct(args)
+        return args
+
+    if isinstance(args, list):
+        normalized: Dict[str, Any] = {}
+        for item in args:
+            if not isinstance(item, dict):
+                continue
+            raw_key = item.get("key") or item.get("name")
+            key = _unwrap_proto_value(raw_key)
+            if isinstance(key, dict):
+                key = None
+            if key:
+                value = item.get("value")
+                if value is None:
+                    value = _unwrap_proto_value(item)
+                else:
+                    value = _unwrap_proto_value(value)
+                normalized[str(key)] = value
+        return normalized
+
+    if isinstance(args, str):
+        raw = args.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {"_raw": parsed}
+        except json.JSONDecodeError:
+            return {"_raw": raw}
+
+    return {}
+
+
+def extract_thought_signature(part_or_call: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(part_or_call, dict):
+        return None
+    for key in ("thoughtSignature", "thought_signature", "signature"):
+        value = part_or_call.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _default_from_schema(schema: Dict[str, Any]) -> Any:
+    if not isinstance(schema, dict):
+        return None
+    if "default" in schema:
+        return schema.get("default")
+    if "enum" in schema and isinstance(schema.get("enum"), list):
+        for value in schema["enum"]:
+            if value is not None:
+                return value
+
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        schema_type = next((t for t in schema_type if t != "null"), None)
+
+    if schema_type == "string":
+        return ""
+    if schema_type in {"number", "integer"}:
+        return 0
+    if schema_type == "boolean":
+        return False
+    if schema_type == "array":
+        return []
+    if schema_type == "object":
+        return {}
+
+    for union_key in ("anyOf", "oneOf", "allOf"):
+        options = schema.get(union_key)
+        if isinstance(options, list) and options:
+            for option in options:
+                default = _default_from_schema(option)
+                if default is not None:
+                    return default
+
+    return None
+
+
+def _coerce_tool_args(
+    args: Any, schema: Optional[Dict[str, Any]], tool_name: Optional[str] = None
+) -> Dict[str, Any]:
+    if isinstance(args, dict):
+        coerced = dict(args)
+    else:
+        coerced = {}
+
+    if not isinstance(schema, dict):
+        return coerced
+
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+    if not isinstance(required, list) or not isinstance(properties, dict):
+        return coerced
+
+    lower_map = {
+        str(k).lower(): k for k in properties.keys() if isinstance(k, str)
+    }
+    aliases = {
+        "url": ["uri", "link", "href"],
+        "query": ["q", "search", "prompt"],
+        "path": ["file", "filepath", "file_path"],
+        "file_path": ["path", "file", "filepath"],
+        "command": ["cmd"],
+    }
+
+    for key in required:
+        if key in coerced and coerced[key] not in ("", None):
+            continue
+        if not isinstance(key, str):
+            continue
+        for alias in aliases.get(key.lower(), []):
+            mapped = lower_map.get(alias)
+            if mapped and mapped in coerced and coerced[mapped] not in ("", None):
+                coerced[key] = coerced[mapped]
+                break
+
+    raw_value = None
+    if "_raw" in coerced:
+        raw_value = coerced.pop("_raw")
+
+    if raw_value is not None and isinstance(raw_value, (str, int, float, bool)):
+        target_key = None
+        if len(required) == 1 and required[0] in properties:
+            target_key = required[0]
+        elif len(properties) == 1:
+            target_key = next(iter(properties.keys()), None)
+        else:
+            for candidate in (
+                "command",
+                "cmd",
+                "query",
+                "path",
+                "file_path",
+                "filepath",
+                "file",
+                "url",
+                "pattern",
+                "text",
+            ):
+                if candidate in properties:
+                    target_key = candidate
+                    break
+        if target_key and target_key not in coerced:
+            coerced[target_key] = raw_value
+
+    user_text = LAST_USER_TEXT.strip() if isinstance(LAST_USER_TEXT, str) else ""
+    user_urls = LAST_USER_URLS if isinstance(LAST_USER_URLS, list) else []
+
+    for key in required:
+        if key in coerced and coerced[key] not in ("", None):
+            continue
+        prop_schema = properties.get(key, {})
+        default_value = _default_from_schema(prop_schema)
+        if default_value is None:
+            # Heuristic defaults for common file/path parameters.
+            if isinstance(key, str):
+                lower_key = key.lower()
+                if lower_key in {"path", "file", "filepath", "file_path", "directory", "dir"}:
+                    default_value = "."
+                elif lower_key in {"paths", "files"}:
+                    default_value = ["."]
+                elif lower_key in {"url", "page_url", "pageurl", "link"} and user_urls:
+                    default_value = user_urls[0]
+                elif lower_key in {"query", "prompt", "text", "instruction"} and user_text:
+                    default_value = user_text
+        elif isinstance(default_value, str) and not default_value:
+            # Prefer user context over empty defaults for text/url fields.
+            if isinstance(key, str):
+                lower_key = key.lower()
+                if lower_key in {"url", "page_url", "pageurl", "link"} and user_urls:
+                    default_value = user_urls[0]
+                elif lower_key in {"query", "prompt", "text", "instruction"} and user_text:
+                    default_value = user_text
+        if default_value is not None:
+            coerced[key] = default_value
+
+    return coerced
+
+
+def convert_gemini_to_anthropic_format(
+    gemini_response: Dict[str, Any], tool_schemas: Optional[Dict[str, Dict[str, Any]]] = None
+) -> Dict[str, Any]:
     """
     Convert Gemini API response to Anthropic API format.
 
@@ -801,19 +1324,139 @@ def convert_gemini_to_anthropic_format(gemini_response: Dict[str, Any]) -> Dict[
     content = []
     finish_reason = "end_turn"
 
-    # Extract text content and tool calls in order
+    def extract_thinking_text(part: Dict[str, Any]) -> Optional[str]:
+        """Extract thinking content from a Gemini part, if present."""
+        if "thought" in part:
+            thought = part.get("thought")
+            if isinstance(thought, str):
+                return thought
+            if isinstance(thought, dict):
+                return thought.get("text") or thought.get("thought")
+            if thought is True and isinstance(part.get("text"), str):
+                return part["text"]
+        if "thinking" in part:
+            thinking = part.get("thinking")
+            if isinstance(thinking, str):
+                return thinking
+            if isinstance(thinking, dict):
+                return thinking.get("text") or thinking.get("thinking")
+        if "thoughts" in part:
+            thoughts = part.get("thoughts")
+            if isinstance(thoughts, str):
+                return thoughts
+            if isinstance(thoughts, list):
+                return "\n".join([t for t in thoughts if isinstance(t, str)])
+            if isinstance(thoughts, dict):
+                return thoughts.get("text") or thoughts.get("thoughts")
+        if part.get("type") in {"thought", "thinking"} and isinstance(part.get("text"), str):
+            return part["text"]
+        return None
+
+    def split_thought_and_text(text: str) -> tuple[Optional[str], Optional[str]]:
+        """Heuristically split blended thought+answer text into separate parts."""
+        if not isinstance(text, str):
+            return None, None
+        cleaned = text.strip()
+        if not cleaned:
+            return None, None
+
+        if "\n\n" in cleaned:
+            before, after = cleaned.split("\n\n", 1)
+            if before.strip() and after.strip():
+                return before.strip(), after.strip()
+
+        thought_markers = (
+            "The user",
+            "User is",
+            "I should",
+            "I'll ",
+            "I will",
+            "Let's ",
+            "We should",
+            "My task",
+            "The question",
+        )
+        answer_markers = (
+            "I'm ",
+            "I am ",
+            "Here is",
+            "Here's",
+            "The answer",
+            "Yes",
+            "No",
+            "It is",
+            "It's ",
+        )
+        if not any(marker in cleaned for marker in thought_markers):
+            return None, None
+
+        split_at = None
+        for marker in answer_markers:
+            idx = cleaned.find(marker)
+            if idx > 8:
+                split_at = idx if split_at is None else min(split_at, idx)
+
+        if split_at is None:
+            return None, None
+
+        thought = cleaned[:split_at].strip()
+        answer = cleaned[split_at:].strip()
+        if len(thought) < 10 or len(answer) < 3:
+            return None, None
+        return thought, answer
+
+    saw_thinking = False
+
+    pending_thought_signature: Optional[str] = None
+
+    # Extract thinking, text content, and tool calls in order
     for part in candidate.get("content", {}).get("parts", []):
-        if "text" in part:
+        part_signature = extract_thought_signature(part)
+        if part_signature:
+            pending_thought_signature = part_signature
+        thinking_text = extract_thinking_text(part)
+        if thinking_text:
+            saw_thinking = True
+            thought, answer = split_thought_and_text(thinking_text)
+            if thought and answer:
+                content.append({"type": "thinking", "thinking": thought})
+                content.append({"type": "text", "text": answer})
+            else:
+                content.append({"type": "thinking", "thinking": thinking_text})
+        elif "text" in part:
             # Add text content immediately to preserve order
             content.append({"type": "text", "text": part["text"]})
         elif "functionCall" in part:
             func_call = part["functionCall"]
+            func_name = func_call.get("name", "")
+            thought_signature = (
+                extract_thought_signature(part)
+                or extract_thought_signature(func_call)
+                or pending_thought_signature
+            )
+            if thought_signature and thought_signature == pending_thought_signature:
+                pending_thought_signature = None
+            raw_tool_id = func_call.get("id")
+            tool_id = (
+                raw_tool_id
+                if isinstance(raw_tool_id, str) and raw_tool_id
+                else f"toolu_{uuid.uuid4().hex[:24]}"
+            )
+            if thought_signature:
+                TOOL_THOUGHT_SIGNATURES[tool_id] = thought_signature
+            TOOL_CALL_CONTEXT[tool_id] = {"name": func_name, "args": parse_function_args(func_call)}
+            if isinstance(tool_schemas, dict) and func_name not in tool_schemas:
+                continue
             content.append(
                 {
                     "type": "tool_use",
-                    "id": f"toolu_{uuid.uuid4().hex[:24]}",
-                    "name": func_call.get("name", ""),
-                    "input": func_call.get("args", {}),
+                    "id": tool_id,
+                    "name": func_name,
+                    "input": _coerce_tool_args(
+                        parse_function_args(func_call),
+                        tool_schemas.get(func_name) if isinstance(tool_schemas, dict) else None,
+                        func_name,
+                    ),
                 }
             )
 
@@ -825,6 +1468,8 @@ def convert_gemini_to_anthropic_format(gemini_response: Dict[str, Any]) -> Dict[
         finish_reason = "end_turn"
     elif finish_status == "SAFETY":
         finish_reason = "error"
+    if any(block.get("type") == "tool_use" for block in content) and finish_reason == "end_turn":
+        finish_reason = "tool_use"
 
     # Extract usage
     usage_metadata = gemini_response.get("usageMetadata", {})
@@ -844,7 +1489,9 @@ def convert_gemini_to_anthropic_format(gemini_response: Dict[str, Any]) -> Dict[
 
 
 async def convert_gemini_stream_to_anthropic_format(
-    stream_generator: AsyncIterator[Dict[str, Any]], original_model: str
+    stream_generator: AsyncIterator[Dict[str, Any]],
+    original_model: str,
+    tool_schemas: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> AsyncIterator[str]:
     """
     Convert Gemini SSE stream to Anthropic SSE format.
@@ -860,16 +1507,15 @@ async def convert_gemini_stream_to_anthropic_format(
 
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     text_buffer = ""
-    tool_calls: Dict[str, Any] = {}
-    text_block_index = 0
+    tool_calls: List[Dict[str, Any]] = []
+    current_block_type: Optional[str] = None
+    current_block_index = -1
     input_tokens = 0
     output_tokens = 0
+    pending_thought_signature: Optional[str] = None
 
     # Send message_start event
     yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': message_id, 'type': 'message', 'role': 'assistant', 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
-
-    # Send content_block_start for text
-    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
 
     has_content = False
     first_delta = True
@@ -878,6 +1524,104 @@ async def convert_gemini_stream_to_anthropic_format(
     had_error = False
 
     try:
+        def extract_thinking_text(part: Dict[str, Any]) -> Optional[str]:
+            """Extract thinking content from a Gemini part, if present."""
+            if "thought" in part:
+                thought = part.get("thought")
+                if isinstance(thought, str):
+                    return thought
+                if isinstance(thought, dict):
+                    return thought.get("text") or thought.get("thought")
+                if thought is True and isinstance(part.get("text"), str):
+                    return part["text"]
+            if "thinking" in part:
+                thinking = part.get("thinking")
+                if isinstance(thinking, str):
+                    return thinking
+                if isinstance(thinking, dict):
+                    return thinking.get("text") or thinking.get("thinking")
+            if "thoughts" in part:
+                thoughts = part.get("thoughts")
+                if isinstance(thoughts, str):
+                    return thoughts
+                if isinstance(thoughts, list):
+                    return "\n".join([t for t in thoughts if isinstance(t, str)])
+                if isinstance(thoughts, dict):
+                    return thoughts.get("text") or thoughts.get("thoughts")
+            if part.get("type") in {"thought", "thinking"} and isinstance(part.get("text"), str):
+                return part["text"]
+            return None
+
+        def split_thought_and_text(text: str) -> tuple[Optional[str], Optional[str]]:
+            """Heuristically split blended thought+answer text into separate parts."""
+            if not isinstance(text, str):
+                return None, None
+            cleaned = text.strip()
+            if not cleaned:
+                return None, None
+
+            if "\n\n" in cleaned:
+                before, after = cleaned.split("\n\n", 1)
+                if before.strip() and after.strip():
+                    return before.strip(), after.strip()
+
+            thought_markers = (
+                "The user",
+                "User is",
+                "I should",
+                "I'll ",
+                "I will",
+                "Let's ",
+                "We should",
+                "My task",
+                "The question",
+            )
+            answer_markers = (
+                "I'm ",
+                "I am ",
+                "Here is",
+                "Here's",
+                "The answer",
+                "Yes",
+                "No",
+                "It is",
+                "It's ",
+            )
+            if not any(marker in cleaned for marker in thought_markers):
+                return None, None
+
+            split_at = None
+            for marker in answer_markers:
+                idx = cleaned.find(marker)
+                if idx > 8:
+                    split_at = idx if split_at is None else min(split_at, idx)
+
+            if split_at is None:
+                return None, None
+
+            thought = cleaned[:split_at].strip()
+            answer = cleaned[split_at:].strip()
+            if len(thought) < 10 or len(answer) < 3:
+                return None, None
+            return thought, answer
+
+        def start_block(block_type: str) -> Optional[str]:
+            nonlocal current_block_type, current_block_index
+            if current_block_type == block_type:
+                return None
+            if current_block_type is not None:
+                stop_event = f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_block_index})}\n\n"
+            else:
+                stop_event = None
+            current_block_index += 1
+            current_block_type = block_type
+            if block_type == "thinking":
+                content_block = {"type": "thinking", "thinking": ""}
+            else:
+                content_block = {"type": "text", "text": ""}
+            start_event = f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': content_block})}\n\n"
+            return (stop_event or "") + start_event
+
         async for chunk in stream_generator:
             # Antigravity responses are wrapped in {"response": {...}, "traceId": "..."}
             # Unwrap if necessary
@@ -892,7 +1636,46 @@ async def convert_gemini_stream_to_anthropic_format(
             parts = candidate.get("content", {}).get("parts", [])
 
             for part in parts:
-                if "text" in part:
+                part_signature = extract_thought_signature(part)
+                if part_signature:
+                    pending_thought_signature = part_signature
+                thinking_text = extract_thinking_text(part)
+                if thinking_text:
+                    if not str(thinking_text).strip():
+                        continue
+                    has_content = True
+                    if first_delta:
+                        yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
+                        first_delta = False
+
+                    thought, answer = split_thought_and_text(thinking_text)
+                    if thought and answer:
+                        if not thought.strip():
+                            thought = None
+                        if not answer.strip():
+                            answer = None
+                    if thought and answer:
+                        maybe_events = start_block("thinking")
+                        if maybe_events:
+                            yield maybe_events
+                        text_buffer += thought
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': {'type': 'thinking_delta', 'thinking': thought}})}\n\n"
+
+                        maybe_events = start_block("text")
+                        if maybe_events:
+                            yield maybe_events
+                        text_buffer += answer
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': {'type': 'text_delta', 'text': answer}})}\n\n"
+                    else:
+                        maybe_events = start_block("thinking")
+                        if maybe_events:
+                            yield maybe_events
+                        text_buffer += thinking_text
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': {'type': 'thinking_delta', 'thinking': thinking_text}})}\n\n"
+
+                elif "text" in part:
+                    if not str(part.get("text", "")).strip():
+                        continue
                     has_content = True
                     if first_delta:
                         yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
@@ -900,18 +1683,91 @@ async def convert_gemini_stream_to_anthropic_format(
 
                     text = part["text"]
                     text_buffer += text
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': text}})}\n\n"
+                    thought, answer = split_thought_and_text(text)
+                    if thought and answer:
+                        if not thought.strip():
+                            thought = None
+                        if not answer.strip():
+                            answer = None
+                    if thought and answer:
+                        maybe_events = start_block("thinking")
+                        if maybe_events:
+                            yield maybe_events
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': {'type': 'thinking_delta', 'thinking': thought}})}\n\n"
+
+                        maybe_events = start_block("text")
+                        if maybe_events:
+                            yield maybe_events
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': {'type': 'text_delta', 'text': answer}})}\n\n"
+                    else:
+                        maybe_events = start_block("text")
+                        if maybe_events:
+                            yield maybe_events
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': {'type': 'text_delta', 'text': text}})}\n\n"
 
                 elif "functionCall" in part:
                     func_call = part["functionCall"]
                     func_name = func_call.get("name", "")
-                    func_args = func_call.get("args", {})
+                    thought_signature = (
+                        extract_thought_signature(part)
+                        or extract_thought_signature(func_call)
+                        or pending_thought_signature
+                    )
+                    if thought_signature and thought_signature == pending_thought_signature:
+                        pending_thought_signature = None
+                    logger.info(
+                        "Antigravity functionCall keys: %s",
+                        sorted(func_call.keys()) if isinstance(func_call, dict) else [],
+                    )
+                    func_args = _coerce_tool_args(
+                        parse_function_args(func_call),
+                        tool_schemas.get(func_name) if isinstance(tool_schemas, dict) else None,
+                        func_name,
+                    )
+                    if isinstance(tool_schemas, dict) and func_name not in tool_schemas:
+                        continue
+                    if func_name:
+                        logger.info(
+                            "Antigravity stream tool_call: %s (args: %s)",
+                            func_name,
+                            json.dumps(func_args)[:300] if isinstance(func_args, dict) else "",
+                        )
 
-                    if func_name not in tool_calls:
-                        tool_calls[func_name] = {
-                            "id": f"toolu_{uuid.uuid4().hex[:24]}",
-                            "name": func_name,
-                            "args": func_args,
+                    raw_tool_id = func_call.get("id")
+                    tool_id = (
+                        raw_tool_id
+                        if isinstance(raw_tool_id, str) and raw_tool_id
+                        else f"toolu_{uuid.uuid4().hex[:24]}"
+                    )
+                    existing = next(
+                        (tc for tc in tool_calls if tc.get("id") == tool_id),
+                        None,
+                    )
+                    if existing:
+                        if func_args:
+                            existing["args"] = func_args
+                        if thought_signature and not existing.get("thought_signature"):
+                            existing["thought_signature"] = thought_signature
+                    elif (
+                        tool_calls
+                        and tool_calls[-1]["name"] == func_name
+                        and not tool_calls[-1]["args"]
+                        and func_args
+                    ):
+                        tool_calls[-1]["args"] = func_args
+                    else:
+                        tool_calls.append(
+                            {
+                                "id": tool_id,
+                                "name": func_name,
+                                "args": func_args,
+                                "thought_signature": thought_signature,
+                            }
+                        )
+                    if tool_calls:
+                        TOOL_CALL_CONTEXT[tool_calls[-1]["id"]] = {
+                            "name": tool_calls[-1]["name"],
+                            "args": tool_calls[-1]["args"],
                         }
 
             # Update usage if available
@@ -929,14 +1785,19 @@ async def convert_gemini_stream_to_anthropic_format(
         had_error = True
         logger.error(f"Error in stream conversion: {e}")
 
-    # Send content_block_stop
-    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+    # Close any open content block
+    if current_block_type is not None:
+        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_block_index})}\n\n"
 
     # Send any tool calls
-    for tool_call in tool_calls.values():
-        tool_index = text_block_index + 1
+    for tool_call in tool_calls:
+        tool_index = current_block_index + 1
+        thought_signature = tool_call.get("thought_signature")
+        if thought_signature:
+            TOOL_THOUGHT_SIGNATURES[tool_call["id"]] = thought_signature
         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': tool_index, 'content_block': {'type': 'tool_use', 'id': tool_call['id'], 'name': tool_call['name'], 'input': tool_call['args']}})}\n\n"
         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': tool_index})}\n\n"
+        current_block_index = tool_index
 
     # Map finish reason
     final_stop = "error" if had_error else "end_turn"
@@ -946,6 +1807,13 @@ async def convert_gemini_stream_to_anthropic_format(
             final_stop = "max_tokens"
         elif finish_status == "SAFETY":
             final_stop = "error"
+    if tool_calls and final_stop == "end_turn":
+        final_stop = "tool_use"
+    logger.info(
+        "Antigravity stream completed (tool_calls=%s, stop_reason=%s)",
+        len(tool_calls),
+        final_stop,
+    )
 
     # Send message_delta
     yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': final_stop, 'stop_sequence': None}, 'usage': {'input_tokens': input_tokens, 'output_tokens': output_tokens}})}\n\n"
