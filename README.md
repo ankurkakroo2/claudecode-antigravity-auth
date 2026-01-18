@@ -52,6 +52,15 @@ This path uses Google OAuth (Antigravity) and is the recommended way to get **Cl
    anticlaude -p --model opus "ping"
    ```
 
+## Docs
+
+Project docs live in `docs/`:
+- `docs/LLD.md` (low-level design / architecture)
+- `docs/IMPLEMENTATION_PLAN.md` (current plan)
+- `docs/RUNNING_NOTES.md` (live progress + fixes + remaining issues)
+
+Older notes were moved to `.archived/`.
+
 ### gclaude at a glance
 
 `gclaude` provides:
