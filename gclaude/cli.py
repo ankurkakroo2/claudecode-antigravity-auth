@@ -697,6 +697,37 @@ def update(local):
         raise click.ClickException(1)
 
 
+@cli.command(name="install-shell")
+@click.option(
+    "--rc-path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Override shell rc path (for testing).",
+)
+@click.option("--force", is_flag=True, help="Overwrite existing gclaude shell block.")
+def install_shell(rc_path, force):
+    """Install the anticlaude shell helper into your rc file."""
+    from gclaude.shell import install_shell_block
+
+    try:
+        rc_file, changed = install_shell_block(rc_path=rc_path, force=force)
+    except Exception as e:
+        console.print(f"[red]✗ Shell install failed: {e}[/red]")
+        raise click.ClickException(1)
+
+    if changed:
+        console.print(f"[green]✓ Added anticlaude helper to {rc_file}[/green]")
+        console.print(f"[dim]Run 'source {rc_file}' to use immediately[/dim]")
+    else:
+        console.print(f"[dim]anticlaude helper already exists in {rc_file}[/dim]")
+
+    console.print()
+    console.print("[bold]Next steps:[/bold]")
+    console.print("  • Run: [cyan]gclaude init[/cyan] (OAuth + model mapping)")
+    console.print("  • If needed: [cyan]gcloud init[/cyan]")
+    console.print("  • Then use: [cyan]anticlaude \"your prompt\"[/cyan]")
+
+
 def main():
     """Main entry point for the CLI."""
     cli()

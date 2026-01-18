@@ -2,6 +2,25 @@
 
 ---
 
+## Install (No Repo Clone)
+
+One-line install that adds the `anticlaude` helper to your shell and sets up the proxy runner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ankurkakroo2/claudecode-antigravity-auth/main/scripts/install.sh | bash
+```
+
+After install:
+- Initialize OAuth + model mappings: `gclaude init`
+- If needed: `gcloud init`
+- Run Claude Code with auto-starting proxy: `anticlaude "your prompt"`
+
+You can also install the helper manually with:
+
+```bash
+gclaude install-shell
+```
+
 ## Quick Start (OAuth / Google AI Pro)
 
 This proxy is **Antigravity-only** (Google OAuth). No Gemini API key is supported or required.
@@ -22,28 +41,16 @@ This proxy is **Antigravity-only** (Google OAuth). No Gemini API key is supporte
    ```bash
    python -m gclaude init
    ```
-4. **Start the proxy**
+4. **Install the shell helper (auto-starts proxy)**
    ```bash
-   python -m gclaude start
+   gclaude install-shell
+   source ~/.zshrc   # or ~/.bashrc
    ```
-5. **Create Claude Code settings**
+5. **Run Claude Code via the helper**
    ```bash
-   cat > ~/.claude/antigravity-settings.json <<'JSON'
-   {
-     "env": {
-       "ANTHROPIC_AUTH_TOKEN": "dummy-key-proxy-handles-auth",
-       "ANTHROPIC_BASE_URL": "http://127.0.0.1:8082"
-     }
-   }
-   JSON
+   anticlaude "ping"
    ```
-6. **Optional: add a shell helper**
-   ```bash
-   anticlaude() {
-     claude --settings ~/.claude/antigravity-settings.json --dangerously-skip-permissions "$@"
-   }
-   ```
-7. **Verify**
+6. **Verify**
    ```bash
    opencode run -m google/antigravity-claude-sonnet-4-5-thinking "ping"
    opencode run -m google/antigravity-claude-opus-4-5-thinking "ping"
@@ -72,8 +79,6 @@ See the [gclaude CLI](#gclaude-cli) section for full commands and config paths.
 ---
 
 This server bridges **Claude Code** with **Antigravity (Google OAuth)**. It translates requests from Anthropic's Messages API format into the Antigravity API and converts responses back so Claude Code can work seamlessly.
-
-![Claude Code with Antigravity Proxy](image.png)
 ## Features
 
 - **Antigravity OAuth (Google AI Pro)**: Use Claude Sonnet/Opus via Google OAuth.
@@ -93,30 +98,23 @@ This server bridges **Claude Code** with **Antigravity (Google OAuth)**. It tran
 
 ## Usage with Claude Code
 
-1. **Start the Proxy Server**: Ensure the proxy is running on your configured port (default: `8082`).
-
-2. **Configure Claude Code to Use the Proxy**:
+1. **Use the shell helper (recommended)**: `anticlaude` auto-starts the proxy, writes
+   `~/.claude/antigravity-settings.json`, and uses `~/.claude/mcp_config.json` if present.
    ```bash
-   claude --settings ~/.claude/antigravity-settings.json
-   # or:
-   anticlaude
+   anticlaude "summarize my repo"
    ```
    If Claude Code asks for a token, set `ANTHROPIC_AUTH_TOKEN` to any dummy value.
+
+2. **Manual mode (optional)**:
+   ```bash
+   claude --settings ~/.claude/antigravity-settings.json
+   ```
+   `gclaude init` generates `~/.claude/antigravity-settings.json` automatically.
 
 3. **Quick non-interactive test**
    ```bash
    anticlaude -p --model sonnet "ping"
    anticlaude -p --model opus "ping"
-   ```
-
-4. **Use `CLAUDE.md` for Better Tooling**
-   Copy `CLAUDE.md` into your project directory so Claude Code gets the proxy-specific tool guidance:
-   ```bash
-   cp /path/to/<repo-directory>/CLAUDE.md /your/project/directory/
-   ```
-   Start a new Claude Code session with:
-   ```
-   First read and process CLAUDE.md with intent. After understanding and agreeing to use the policies and practices outlined in the document, respond with YES
    ```
 
 ## How It Works
